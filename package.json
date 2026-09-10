@@ -1,0 +1,31 @@
+{
+  "name": "duolingo-aragon",
+  "version": "1.0.0",
+  "description": "Aplicación educativa de programación inspirada en Duolingo",
+  "productName": "CodePath",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint src --ext .vue,.js,.jsx,.cjs,.mjs --fix",
+    "format": "prettier --write src/",
+    "cap:sync": "npx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
+    "@quasar/extras": "^1.16.12",
+    "quasar": "^2.17.4",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.8",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^9.32.0",
+    "prettier": "^3.4.2",
+    "sass-embedded": "^1.104.0",
+    "vite": "^6.4.3"
+  }
+}
