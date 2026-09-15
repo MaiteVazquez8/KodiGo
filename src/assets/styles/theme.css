@@ -1,0 +1,209 @@
+:root {
+  --k-bg: #000000;
+  --k-deep: #3e065f;
+  --k-mid: #700b97;
+  --k-accent: #8e05c2;
+  --k-accent-soft: rgba(142, 5, 194, 0.16);
+  --k-accent-softer: rgba(142, 5, 194, 0.08);
+  --k-text: #ffffff;
+  --k-text-2: rgba(255, 255, 255, 0.66);
+  --k-text-3: rgba(255, 255, 255, 0.4);
+  --k-line: rgba(255, 255, 255, 0.09);
+  --k-surface: #0d0512;
+  --k-surface-2: #18091f;
+  --k-success: #34d399;
+  --k-error: #ff5d73;
+  --k-radius: 18px;
+  --k-radius-sm: 12px;
+  --k-space-1: 4px;
+  --k-space-2: 8px;
+  --k-space-3: 12px;
+  --k-space-4: 16px;
+  --k-space-5: 20px;
+  --k-space-6: 24px;
+  --k-space-7: 32px;
+  --k-space-8: 40px;
+  --k-font: 'Manrope', system-ui, -apple-system, sans-serif;
+  --k-font-brand: 'Space Grotesk', sans-serif;
+  --k-font-code: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--k-bg);
+  color: var(--k-text);
+  font-family: var(--k-font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+.k-app {
+  min-height: 100vh;
+  background:
+    radial-gradient(920px 460px at 50% -140px, rgba(112, 11, 151, 0.32), transparent 65%),
+    var(--k-bg);
+  color: var(--k-text);
+}
+
+.k-app.with-nav {
+  padding-bottom: calc(88px + env(safe-area-inset-bottom));
+}
+
+.k-screen {
+  min-height: 100vh;
+  padding-top: max(16px, env(safe-area-inset-top));
+  padding-bottom: max(32px, env(safe-area-inset-bottom));
+}
+
+.k-container {
+  width: 100%;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.k-font-brand {
+  font-family: var(--k-font-brand);
+}
+
+.k-mono {
+  font-family: var(--k-font-code);
+}
+
+.k-h1 {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.k-h2 {
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.k-eyebrow {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--k-accent);
+}
+
+.k-muted {
+  color: var(--k-text-2);
+}
+
+.k-dim {
+  color: var(--k-text-3);
+}
+
+.k-link {
+  color: var(--k-text-2);
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.k-btn {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--k-space-2);
+  border-radius: 14px;
+  padding: 14px 20px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  transition:
+    transform 0.08s ease,
+    opacity 0.15s ease,
+    background 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.k-btn:active {
+  transform: scale(0.98);
+}
+
+.k-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+  transform: none;
+}
+
+.k-btn--block {
+  width: 100%;
+}
+
+.k-btn--lg {
+  padding: 16px 20px;
+  font-size: 16px;
+  border-radius: 16px;
+}
+
+.k-btn--primary {
+  background: var(--k-accent);
+  color: #fff;
+  box-shadow: 0 6px 0 var(--k-deep);
+}
+
+.k-btn--primary:disabled {
+  box-shadow: none;
+}
+
+.k-btn--ghost {
+  background: var(--k-surface-2);
+  color: var(--k-text);
+  border: 1px solid var(--k-line);
+}
+
+a.k-btn {
+  text-decoration: none;
+}
+
+.k-progress {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--k-surface-2);
+  overflow: hidden;
+}
+
+.k-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--k-accent);
+  transition: width 0.3s ease;
+}

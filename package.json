@@ -1,8 +1,8 @@
 {
-  "name": "duolingo-aragon",
+  "name": "kodigo",
   "version": "1.0.0",
-  "description": "Aplicación educativa de programación inspirada en Duolingo",
-  "productName": "CodePath",
+  "description": "Kodigo: aplicación educativa para aprender a programar",
+  "productName": "Kodigo",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -1,0 +1,42 @@
+export const units = [
+  {
+    id: 1,
+    courseId: 'javascript',
+    title: 'Variables y datos',
+    description: 'Guardá información y conocé los tipos de datos básicos de JavaScript.',
+    status: 'available',
+    progress: 0,
+  },
+  {
+    id: 2,
+    courseId: 'javascript',
+    title: 'Operadores',
+    description: 'Calculá con números y compará valores usando operadores.',
+    status: 'locked',
+    progress: 0,
+  },
+  {
+    id: 3,
+    courseId: 'javascript',
+    title: 'Condicionales',
+    description: 'Tomá decisiones en tu código con if y else.',
+    status: 'locked',
+    progress: 0,
+  },
+  {
+    id: 4,
+    courseId: 'javascript',
+    title: 'Bucles',
+    description: 'Repetí tareas automáticamente con for y while.',
+    status: 'locked',
+    progress: 0,
+  },
+  {
+    id: 5,
+    courseId: 'javascript',
+    title: 'Funciones',
+    description: 'Organizá tu código en bloques reutilizables.',
+    status: 'locked',
+    progress: 0,
+  },
+]

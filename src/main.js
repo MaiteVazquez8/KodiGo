@@ -4,6 +4,7 @@ import 'quasar/src/css/index.sass'
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
+import './assets/styles/theme.css'
 
 const app = createApp(App)
 

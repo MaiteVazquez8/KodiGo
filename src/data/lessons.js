@@ -1,0 +1,95 @@
+export const lessons = [
+  {
+    id: 'js-u1-l1',
+    unitId: 1,
+    title: 'Tu primera variable',
+    kind: 'lesson',
+    status: 'available',
+    intro: {
+      message: 'En JavaScript guardamos información en variables. Fijate en este ejemplo:',
+      code: 'let nombre = "Ana";\nconsole.log(nombre);',
+    },
+    activityIds: ['js-u1-a1', 'js-u1-a2'],
+  },
+  {
+    id: 'js-u1-l2',
+    unitId: 1,
+    title: 'Tipos de datos',
+    kind: 'lesson',
+    status: 'locked',
+    intro: {
+      message:
+        'Cada dato tiene un tipo: los números (number) y los textos (string) son los más comunes.',
+      code: 'let edad = 25;      // number\nlet nombre = "Ana";  // string',
+    },
+    activityIds: ['js-u1-a3', 'js-u1-a4', 'js-u1-a5'],
+  },
+  {
+    id: 'js-u1-l3',
+    unitId: 1,
+    title: 'Repaso de variables',
+    kind: 'challenge',
+    status: 'locked',
+    activityIds: ['js-u1-a6', 'js-u1-a13'],
+  },
+  {
+    id: 'js-u2-l1',
+    unitId: 2,
+    title: 'Operadores aritméticos',
+    kind: 'lesson',
+    status: 'locked',
+    intro: {
+      message: 'Los operadores permiten calcular: suma (+), resta (-), multiplicación (*) y más.',
+      code: 'let suma = 2 + 3;  // 5\nlet cuadrado = 4 ** 2;  // 16',
+    },
+    activityIds: ['js-u2-a1', 'js-u2-a2'],
+  },
+  {
+    id: 'js-u2-l2',
+    unitId: 2,
+    title: 'Comparación y lógica',
+    kind: 'lesson',
+    status: 'locked',
+    intro: {
+      message: 'Con los operadores de comparación verificamos relaciones entre valores.',
+      code: 'let mayor = 10 > 5;   // true\nlet igual = 2 === 2;   // true',
+    },
+    activityIds: ['js-u2-a3'],
+  },
+  {
+    id: 'js-u3-l1',
+    unitId: 3,
+    title: 'La sentencia if',
+    kind: 'lesson',
+    status: 'locked',
+    intro: {
+      message: 'Con if ejecutamos código solo cuando una condición es verdadera.',
+      code: 'if (edad >= 18) {\n  console.log("Es mayor");\n}',
+    },
+    activityIds: ['js-u3-a1'],
+  },
+  {
+    id: 'js-u4-l1',
+    unitId: 4,
+    title: 'El bucle for',
+    kind: 'lesson',
+    status: 'locked',
+    intro: {
+      message: 'El bucle for repite un bloque de código una cantidad determinada de veces.',
+      code: 'for (let i = 1; i <= 3; i++) {\n  console.log(i);\n}',
+    },
+    activityIds: ['js-u4-a1'],
+  },
+  {
+    id: 'js-u5-l1',
+    unitId: 5,
+    title: 'Declarar funciones',
+    kind: 'lesson',
+    status: 'locked',
+    intro: {
+      message: 'Las funciones agrupan código para reutilizarlo cuando queramos.',
+      code: 'function saludar() {\n  console.log("Hola");\n}\n\nsaludar();',
+    },
+    activityIds: ['js-u5-a1'],
+  },
+]
