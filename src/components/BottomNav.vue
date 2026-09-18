@@ -18,6 +18,18 @@
       <q-icon name="school" size="22px" />
       <span class="nav-label">Cursos</span>
     </RouterLink>
+    <RouterLink to="/ranking" class="nav-item" :class="{ 'is-active': active === 'ranking' }" aria-label="Ranking">
+      <q-icon name="leaderboard" size="22px" />
+      <span class="nav-label">Ranking</span>
+    </RouterLink>
+    <RouterLink to="/friends" class="nav-item" :class="{ 'is-active': active === 'friends' }" aria-label="Amigos">
+      <q-icon name="group" size="22px" />
+      <span class="nav-label">Amigos</span>
+    </RouterLink>
+    <RouterLink to="/profile" class="nav-item" :class="{ 'is-active': active === 'profile' }" aria-label="Perfil">
+      <q-icon name="person" size="22px" />
+      <span class="nav-label">Perfil</span>
+    </RouterLink>
   </nav>
 </template>
 
@@ -29,6 +41,9 @@ const route = useRoute()
 
 const active = computed(() => {
   if (route.name === 'courses' || route.name === 'course') return 'courses'
+  if (route.name === 'ranking') return 'ranking'
+  if (route.name === 'friends') return 'friends'
+  if (route.name === 'profile') return 'profile'
   return 'home'
 })
 </script>
@@ -42,13 +57,12 @@ const active = computed(() => {
   z-index: 30;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: var(--k-space-3);
-  padding: 10px 20px calc(10px + env(safe-area-inset-bottom));
-  background: rgba(0, 0, 0, 0.92);
-  border-top: 1px solid var(--k-line);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  justify-content: space-around;
+  gap: 0;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  background: #07000d;
+  border: 1px solid var(--k-deep);
+  border-radius: 24px 24px 0 0;
 }
 
 .nav-item {
@@ -56,7 +70,8 @@ const active = computed(() => {
   flex-direction: column;
   align-items: center;
   gap: var(--k-space-1);
-  padding: 8px 28px;
+  width: 20%;
+  padding: 4px 2px;
   border-radius: 14px;
   color: var(--k-text-3);
   text-decoration: none;
@@ -69,7 +84,7 @@ const active = computed(() => {
 }
 
 .nav-label {
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.02em;
 }

@@ -12,7 +12,7 @@ import BottomNav from '@/components/BottomNav.vue'
 
 const route = useRoute()
 
-const NAV_ROUTES = ['home', 'courses', 'course']
+const NAV_ROUTES = ['home', 'courses', 'course', 'ranking', 'friends', 'profile']
 
 const showNav = computed(() => NAV_ROUTES.includes(route.name))
 </script>

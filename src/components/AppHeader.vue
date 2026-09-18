@@ -8,8 +8,7 @@
         aria-label="Ir al inicio"
         @click="$router.push('/')"
       >
-        <KodigoGhost :size="30" alt="Kodigo" />
-        <span class="brand-name k-font-brand">Kodigo</span>
+        <span class="brand-name k-font-brand"><b>KODI</b><strong>GO</strong></span>
       </button>
 
       <button v-else type="button" class="back-button" aria-label="Volver" @click="goBack">
@@ -64,14 +63,14 @@ function goBack() {
 
 <style scoped>
 .app-header {
-  margin-bottom: var(--k-space-5);
+  margin-bottom: var(--k-space-3);
 }
 
 .app-header-inner {
   width: 100%;
-  max-width: 460px;
+  max-width: 390px;
   margin: 0 auto;
-  padding: 10px 20px;
+  padding: 8px 16px;
   display: flex;
   align-items: center;
   gap: var(--k-space-2);
@@ -80,7 +79,6 @@ function goBack() {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
   padding: 0;
   background: transparent;
   border: 0;
@@ -89,21 +87,24 @@ function goBack() {
 }
 
 .brand-name {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   color: var(--k-text);
+}
+
+.brand-name strong {
+  color: var(--k-accent);
 }
 
 .back-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  border: 1px solid var(--k-line);
-  background: var(--k-surface-2);
+  width: 24px;
+  height: 28px;
+  border: 0;
+  background: transparent;
   color: var(--k-text);
   cursor: pointer;
   flex-shrink: 0;
@@ -112,7 +113,7 @@ function goBack() {
 
 .app-header-title {
   flex: 1;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: -0.01em;
   color: var(--k-text);

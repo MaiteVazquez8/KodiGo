@@ -13,8 +13,8 @@
   --k-surface-2: #18091f;
   --k-success: #34d399;
   --k-error: #ff5d73;
-  --k-radius: 18px;
-  --k-radius-sm: 12px;
+  --k-radius: 12px;
+  --k-radius-sm: 9px;
   --k-space-1: 4px;
   --k-space-2: 8px;
   --k-space-3: 12px;
@@ -66,9 +66,7 @@ p {
 
 .k-app {
   min-height: 100vh;
-  background:
-    radial-gradient(920px 460px at 50% -140px, rgba(112, 11, 151, 0.32), transparent 65%),
-    var(--k-bg);
+  background: var(--k-bg);
   color: var(--k-text);
 }
 
@@ -78,15 +76,15 @@ p {
 
 .k-screen {
   min-height: 100vh;
-  padding-top: max(16px, env(safe-area-inset-top));
-  padding-bottom: max(32px, env(safe-area-inset-bottom));
+  padding-top: max(8px, env(safe-area-inset-top));
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
 }
 
 .k-container {
   width: 100%;
-  max-width: 460px;
+  max-width: 390px;
   margin: 0 auto;
-  padding: 0 20px;
+  padding: 0 16px;
 }
 
 .k-font-brand {
@@ -98,14 +96,14 @@ p {
 }
 
 .k-h1 {
-  font-size: 30px;
+  font-size: 22px;
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.1;
 }
 
 .k-h2 {
-  font-size: 21px;
+  font-size: 17px;
   font-weight: 800;
   letter-spacing: -0.01em;
 }
@@ -141,9 +139,9 @@ p {
   align-items: center;
   justify-content: center;
   gap: var(--k-space-2);
-  border-radius: 14px;
-  padding: 14px 20px;
-  font-size: 15px;
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 14px;
   font-weight: 800;
   letter-spacing: 0.01em;
   transition:
@@ -168,9 +166,9 @@ p {
 }
 
 .k-btn--lg {
-  padding: 16px 20px;
-  font-size: 16px;
-  border-radius: 16px;
+  padding: 13px 16px;
+  font-size: 14px;
+  border-radius: 10px;
 }
 
 .k-btn--primary {
@@ -194,7 +192,7 @@ a.k-btn {
 }
 
 .k-progress {
-  height: 6px;
+  height: 8px;
   border-radius: 99px;
   background: var(--k-surface-2);
   overflow: hidden;

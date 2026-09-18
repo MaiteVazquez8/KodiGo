@@ -1,6 +1,34 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { supabase } from '@/supabase'
 
-const routes = [
+const router = createRouter({
+  history: createWebHistory(),
+  scrollBehavior: () => ({ top: 0 }),
+  routes: [
+    {
+      path: '/welcome',
+      name: 'welcome',
+      component: () => import('@/views/AuthView.vue'),
+      meta: { mode: 'welcome' },
+  },
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/views/AuthView.vue'),
+    meta: { mode: 'login' },
+  },
+  {
+    path: '/register',
+    name: 'register',
+    component: () => import('@/views/AuthView.vue'),
+    meta: { mode: 'register' },
+  },
+  {
+    path: '/language',
+    name: 'language',
+    component: () => import('@/views/AuthView.vue'),
+    meta: { mode: 'language' },
+  },
   {
     path: '/',
     name: 'home',
@@ -31,16 +59,27 @@ const routes = [
     name: 'activity',
     component: () => import('@/views/ActivityView.vue'),
   },
+  ...['ranking', 'friends', 'profile', 'achievements', 'settings'].map((name) => ({
+    path: `/${name}`,
+    name,
+    component: () => import('@/views/CommunityView.vue'),
+  })),
   {
     path: '/:pathMatch(.*)*',
     redirect: '/',
   },
-]
+]})
 
-const router = createRouter({
-  history: createWebHistory(),
-  routes,
-  scrollBehavior: () => ({ top: 0 }),
+router.beforeEach(async (to, from, next) => {
+  const { data: { session } } = await supabase.auth.getSession()
+
+  if (!session && !['welcome', 'login', 'register', 'language'].includes(to.name)) {
+    next({ name: 'welcome' })
+  } else if (session && ['welcome', 'login', 'register'].includes(to.name)) {
+    next({ name: 'home' })
+  } else {
+    next()
+  }
 })
 
 export default router
