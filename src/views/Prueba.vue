@@ -13,6 +13,17 @@
             </nav>
         </q-page-container>
     </q-layout>
+    <main>
+        <h1>Crear cuenta</h1>
+        <p>Registrate para acceder</p>
+        <form @submit.prevent="registrarUsuario">
+            <label>Correo electrónico<input v-model="correo" type="email" placeholder="tucorreo@gmail.com" autocomplete="email" required></label>
+            <label>Contraseña<input v-model="password" type="password" placeholder="Ingresa tu contraseña" autocomplete="new-password" required></label>
+            <label>Repetir contraseña<input v-model="repetirPassword" type="password" placeholder="Repeti la contraseña" autocomplete="new-password" required></label>
+            <q-btn type="submit" :disabled="cargando">{{cargando ? 'Registrando...' : 'Registrarme'}}</q-btn>
+        </form>
+    </main>
+    <p v-if="mensaje" :class="{ 'rojo': !registroExitoso, 'verde': registroExitoso }">{{ mensaje }}</p>
 </template>
 
 <script setup>
