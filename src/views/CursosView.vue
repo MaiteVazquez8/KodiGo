@@ -1,6 +1,6 @@
 <template>
   <div class="k-screen">
-    <AppHeader title="Cursos" :back="true" />
+    <EncabezadoApp titulo="Cursos" :back="true" />
 
     <main class="k-container courses">
       <p class="k-eyebrow">Elegí tu camino</p>
@@ -10,11 +10,11 @@
       </p>
 
       <div class="course-list">
-        <CourseCard
-          v-for="course in courses"
-          :key="course.id"
-          :course="course"
-          @select="openCourse"
+        <TarjetaCurso
+          v-for="curso in cursos"
+          :key="curso.id"
+          :curso="curso"
+          @select="abrirCurso"
         />
       </div>
     </main>
@@ -24,16 +24,16 @@
 <script setup>
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import AppHeader from '@/components/AppHeader.vue'
-import CourseCard from '@/components/CourseCard.vue'
-import { getCourses } from '@/services/catalog'
+import EncabezadoApp from '@/components/EncabezadoApp.vue'
+import TarjetaCurso from '@/components/TarjetaCurso.vue'
+import { obtenerCursos } from '@/services/catalogo'
 
 const router = useRouter()
 
-const courses = computed(() => getCourses())
+const cursos = computed(() => obtenerCursos())
 
-function openCourse(courseId) {
-  router.push({ name: 'course', params: { courseId } })
+function abrirCurso(courseId) {
+  router.push({ name: 'curso', params: { courseId } })
 }
 </script>
 
@@ -46,6 +46,7 @@ function openCourse(courseId) {
   margin-top: var(--k-space-2);
   font-size: 14px;
   line-height: 1.5;
+  max-width: 330px;
 }
 
 .course-list {

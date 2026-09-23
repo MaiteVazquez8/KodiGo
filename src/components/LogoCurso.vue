@@ -1,9 +1,9 @@
 <template>
   <span v-if="imageSrc" class="course-logo" :class="[`tone-${tone}`]">
-    <img :src="imageSrc" :alt="course.name" class="course-logo-img" draggable="false" />
+    <img :src="imageSrc" :alt="curso.name" class="course-logo-img" draggable="false" />
   </span>
   <span v-else class="course-logo mono" :class="[`tone-${tone}`]" :style="monogramStyle">
-    {{ course.monogram }}
+    {{ curso.monogram }}
   </span>
 </template>
 
@@ -12,9 +12,15 @@ import { computed } from 'vue'
 import { getCourseImage } from '@/assets/img'
 
 const props = defineProps({
+  curso: {
+    type: Object,
+    required: false,
+    default: null,
+  },
   course: {
     type: Object,
-    required: true,
+    required: false,
+    default: null,
   },
   tone: {
     type: String,
@@ -22,10 +28,12 @@ const props = defineProps({
   },
 })
 
-const imageSrc = computed(() => getCourseImage(props.course.logo || props.course.id))
+const curso = computed(() => props.curso || props.course || {})
+
+const imageSrc = computed(() => getCourseImage(curso.value.logo || curso.value.id))
 
 const monogramStyle = computed(() => {
-  const accent = props.course.accent
+  const accent = curso.value.accent || '#8e05c2'
   return {
     background: `${accent}22`,
     color: accent,

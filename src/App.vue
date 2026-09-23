@@ -1,18 +1,18 @@
 <template>
-  <div class="k-app" :class="{ 'with-nav': showNav }">
+  <div class="k-app" :class="{ 'with-nav': mostrarNavegacion }">
     <RouterView />
-    <BottomNav v-if="showNav" />
+    <NavegacionInferior v-if="mostrarNavegacion" />
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import BottomNav from '@/components/BottomNav.vue'
+import NavegacionInferior from '@/components/NavegacionInferior.vue'
 
-const route = useRoute()
+const ruta = useRoute()
 
-const NAV_ROUTES = ['home', 'courses', 'course', 'ranking', 'friends', 'profile']
+const rutasNavegacion = ['inicio', 'cursos', 'curso']
 
-const showNav = computed(() => NAV_ROUTES.includes(route.name))
+const mostrarNavegacion = computed(() => rutasNavegacion.includes(ruta.name))
 </script>

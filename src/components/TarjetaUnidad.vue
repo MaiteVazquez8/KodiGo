@@ -68,10 +68,11 @@ function onSelect() {
 <style scoped>
 .unit-card {
   position: relative;
-  padding: 20px;
-  background: var(--k-surface-2);
-  border: 1px solid var(--k-line);
-  border-radius: var(--k-radius);
+  padding: 18px 18px 16px;
+  background: linear-gradient(180deg, rgba(53, 16, 71, 0.96), rgba(24, 9, 31, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   transition:
     border-color 0.15s ease,
     transform 0.08s ease;
@@ -137,10 +138,10 @@ function onSelect() {
 }
 
 .unit-card-title {
-  margin-top: var(--k-space-4);
-  font-size: 19px;
+  margin-top: 14px;
+  font-size: 22px;
   font-weight: 800;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 .unit-card-desc {
@@ -167,7 +168,7 @@ function onSelect() {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin-top: var(--k-space-4);
+  margin-top: 16px;
   font-size: 13px;
   font-weight: 800;
   color: var(--k-accent);

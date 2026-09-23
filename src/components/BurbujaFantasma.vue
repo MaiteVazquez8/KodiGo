@@ -1,26 +1,26 @@
 <template>
   <div class="ghost-bubble">
-    <KodigoGhost :size="ghostSize" :variant="mood" class="ghost-bubble-avatar" />
+    <FantasmaKodigo :size="tamanoFantasma" :variant="estado" class="ghost-bubble-avatar" />
     <div class="ghost-bubble-box">
-      <p v-if="message" class="ghost-bubble-text">{{ message }}</p>
+      <p v-if="mensaje" class="ghost-bubble-text">{{ mensaje }}</p>
       <slot />
     </div>
   </div>
 </template>
 
 <script setup>
-import KodigoGhost from './KodigoGhost.vue'
+import FantasmaKodigo from './FantasmaKodigo.vue'
 
 defineProps({
-  message: {
+  mensaje: {
     type: String,
     default: '',
   },
-  ghostSize: {
+  tamanoFantasma: {
     type: [Number, String],
     default: 72,
   },
-  mood: {
+  estado: {
     type: String,
     default: 'normal',
   },

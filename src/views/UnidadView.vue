@@ -1,13 +1,13 @@
 <template>
   <div class="k-screen">
-    <AppHeader :title="`Unidad ${unit?.id ?? ''}`" :back="courseLink" />
+    <EncabezadoApp :titulo="`Unidad ${unidad?.id ?? ''}`" :back="linkCurso" />
 
-    <main v-if="unit" class="k-container unit">
-      <p class="k-eyebrow">Curso {{ course?.name }}</p>
-      <h1 class="k-h1 unit-title">{{ unit.title }}</h1>
-      <p class="k-muted unit-desc">{{ unit.description }}</p>
+    <main v-if="unidad" class="k-container unit">
+      <p class="k-eyebrow">Curso {{ curso?.name }}</p>
+      <h1 class="k-h1 unit-title">{{ unidad.title }}</h1>
+      <p class="k-muted unit-desc">{{ unidad.description }}</p>
 
-      <div v-if="unit.status === 'locked'" class="unit-locked-note">
+      <div v-if="unidad.status === 'locked'" class="unit-locked-note">
         <q-icon name="lock" size="18px" />
         Completá la unidad anterior para desbloquear esta.
       </div>
@@ -16,23 +16,23 @@
         <p class="k-eyebrow">Clases</p>
         <div class="lessons-list">
           <button
-            v-for="lesson in lessons"
-            :key="lesson.id"
+            v-for="leccion in lecciones"
+            :key="leccion.id"
             type="button"
             class="lesson-row"
-            :class="[`is-${lesson.status}`]"
-            :disabled="lesson.status === 'locked'"
-            @click="openLesson(lesson)"
+            :class="[`is-${leccion.status}`]"
+            :disabled="leccion.status === 'locked'"
+            @click="abrirLeccion(leccion)"
           >
             <span class="lesson-icon">
-              <q-icon v-if="lesson.status === 'completed'" name="check" size="18px" />
-              <q-icon v-else-if="lesson.status === 'locked'" name="lock" size="15px" />
+              <q-icon v-if="leccion.status === 'completed'" name="check" size="18px" />
+              <q-icon v-else-if="leccion.status === 'locked'" name="lock" size="15px" />
               <q-icon v-else name="play_circle_filled" size="20px" />
             </span>
             <span class="lesson-body">
-              <span class="lesson-kind">{{ kindLabel(lesson.kind) }}</span>
-              <span class="lesson-title">{{ lesson.title }}</span>
-              <span class="lesson-meta">{{ lesson.activityIds?.length }} actividades</span>
+              <span class="lesson-kind">{{ etiquetaTipo(leccion.kind) }}</span>
+              <span class="lesson-title">{{ leccion.title }}</span>
+              <span class="lesson-meta">{{ leccion.activityIds?.length }} actividades</span>
             </span>
             <q-icon name="chevron_right" size="18px" class="lesson-chev" />
           </button>
@@ -40,10 +40,10 @@
       </section>
 
       <button
-        v-if="firstAvailable"
+        v-if="primeraDisponible"
         type="button"
         class="k-btn k-btn--primary k-btn--block unit-cta"
-        @click="openLesson(firstAvailable)"
+        @click="abrirLeccion(primeraDisponible)"
       >
         <q-icon name="play_arrow" size="20px" />
         Empezar primera clase
@@ -55,8 +55,8 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import AppHeader from '@/components/AppHeader.vue'
-import { getCourse, getLessonsForUnit, getUnit, lessonRoute } from '@/services/catalog'
+import EncabezadoApp from '@/components/EncabezadoApp.vue'
+import { obtenerCurso, obtenerLeccionesPorUnidad, obtenerUnidad, rutaLeccion } from '@/services/catalogo'
 
 const route = useRoute()
 const router = useRouter()
@@ -64,24 +64,24 @@ const router = useRouter()
 const courseId = computed(() => route.params.courseId)
 const unitId = computed(() => route.params.unitId)
 
-const unit = computed(() => getUnit(courseId.value, unitId.value))
+const unidad = computed(() => obtenerUnidad(courseId.value, unitId.value))
 
-const course = computed(() => getCourse(courseId.value))
+const curso = computed(() => obtenerCurso(courseId.value))
 
-const lessons = computed(() => (unit.value ? getLessonsForUnit(unit.value.id) : []))
+const lecciones = computed(() => (unidad.value ? obtenerLeccionesPorUnidad(unidad.value.id) : []))
 
-const firstAvailable = computed(() =>
-  unit.value ? lessons.value.find((l) => l.status === 'available') : null,
+const primeraDisponible = computed(() =>
+  unidad.value ? lecciones.value.find((l) => l.status === 'available') : null,
 )
 
-const courseLink = computed(() => ({ name: 'course', params: { courseId: courseId.value } }))
+const linkCurso = computed(() => ({ name: 'curso', params: { courseId: courseId.value } }))
 
-function kindLabel(kind) {
+function etiquetaTipo(kind) {
   return kind === 'challenge' ? 'Desafío' : 'Clase'
 }
 
-function openLesson(lesson) {
-  router.push(lessonRoute(lesson.id))
+function abrirLeccion(leccion) {
+  router.push(rutaLeccion(leccion.id))
 }
 </script>
 
@@ -102,9 +102,9 @@ function openLesson(lesson) {
   gap: var(--k-space-3);
   margin-top: var(--k-space-4);
   padding: 12px 14px;
-  border-radius: var(--k-radius-sm);
-  background: var(--k-surface-2);
-  border: 1px solid var(--k-line);
+  border-radius: 14px;
+  background: rgba(142, 5, 194, 0.08);
+  border: 1px solid rgba(142, 5, 194, 0.22);
   color: var(--k-text-2);
   font-size: 13px;
   font-weight: 600;
@@ -125,15 +125,16 @@ function openLesson(lesson) {
   align-items: center;
   gap: var(--k-space-4);
   padding: 14px 16px;
-  border-radius: var(--k-radius-sm);
+  border-radius: 16px;
   border: 1px solid var(--k-line);
-  background: var(--k-surface-2);
+  background: linear-gradient(180deg, rgba(24, 9, 31, 0.96), rgba(15, 7, 21, 0.98));
   color: var(--k-text);
   cursor: pointer;
   text-align: left;
   transition:
     border-color 0.12s ease,
-    transform 0.08s ease;
+    transform 0.08s ease,
+    box-shadow 0.12s ease;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -163,8 +164,8 @@ function openLesson(lesson) {
   height: 38px;
   flex-shrink: 0;
   border-radius: 12px;
-  background: var(--k-surface);
-  border: 1px solid var(--k-line);
+  background: rgba(142, 5, 194, 0.08);
+  border: 1px solid rgba(142, 5, 194, 0.22);
   color: var(--k-accent);
 }
 

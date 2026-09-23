@@ -1,5 +1,5 @@
 const files = import.meta.glob(
-  ['./*.png', './*.jpg', './*.jpeg', './*.svg', './*.webp', './*.gif'],
+  ['./**/*.{png,jpg,jpeg,svg,webp,gif}', './**/*.png', './**/*.jpg', './**/*.jpeg', './**/*.svg', './**/*.webp', './**/*.gif'],
   { eager: true, import: 'default' },
 )
 
@@ -10,6 +10,7 @@ for (const path of Object.keys(files)) {
     .split('/')
     .pop()
     .replace(/\.(png|jpe?g|svg|webp|gif)$/i, '')
+
   if (name.startsWith('fantasma')) continue
   courseImages[name] = files[path]
 }

@@ -1,17 +1,17 @@
 <template>
   <div class="activity-runner">
-    <h2 class="activity-statement">{{ activity.statement }}</h2>
+    <h2 class="activity-statement">{{ actividadActual.statement }}</h2>
 
-    <CodeBlock v-if="activity.code" :code="activity.code" class="activity-code" />
+    <BloqueCodigo v-if="actividadActual.code" :code="actividadActual.code" class="activity-code" />
 
     <div v-if="isChoice" class="options">
       <button
-        v-for="(option, index) in activity.options"
+        v-for="(option, index) in actividadActual.options"
         :key="index"
         type="button"
         class="option"
         :class="optionClasses(index)"
-        :disabled="submitted && correct"
+        :disabled="submitted"
         @click="pick(index)"
       >
         <span class="option-letter k-mono">{{ letters[index] }}</span>
@@ -27,7 +27,7 @@
           :key="item.index"
           type="button"
           class="line-chip"
-          :disabled="submitted && correct"
+          :disabled="submitted"
           @click="chooseLine(item)"
         >
           {{ item.line }}
@@ -39,7 +39,7 @@
           :key="item.index"
           type="button"
           class="line-chip is-chosen"
-          :disabled="submitted && correct"
+          :disabled="submitted"
           @click="unchoose(item)"
         >
           <span class="order-number k-mono">{{ index + 1 }}</span>
@@ -56,7 +56,7 @@
         type="text"
         class="text-input k-mono"
         :placeholder="placeholder"
-        :disabled="submitted && correct"
+        :disabled="submitted"
         @keyup.enter="handleAction"
       />
       <textarea
@@ -65,7 +65,7 @@
         class="text-input k-mono"
         rows="3"
         :placeholder="placeholder"
-        :disabled="submitted && correct"
+        :disabled="submitted"
       ></textarea>
       <p class="answer-hint">{{ hint }}</p>
     </div>
@@ -74,8 +74,8 @@
       <div v-if="submitted" class="feedback" :class="feedbackClass">
         <q-icon :name="correct ? 'check_circle' : 'cancel'" size="20px" />
         <div class="feedback-body">
-          <strong>{{ correct ? '¡Correcto!' : 'Casi…' }}</strong>
-          <p>{{ correct ? activity.explanation : wrongMessage }}</p>
+          <strong>{{ correct ? 'Correcto' : 'Incorrecto' }}</strong>
+          <p>{{ correct ? actividadActual.explanation : wrongMessage }}</p>
         </div>
       </div>
     </transition>
@@ -93,16 +93,24 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import CodeBlock from './CodeBlock.vue'
+import BloqueCodigo from './BloqueCodigo.vue'
 
 const props = defineProps({
   activity: {
     type: Object,
-    required: true,
+    required: false,
+    default: null,
+  },
+  actividad: {
+    type: Object,
+    required: false,
+    default: null,
   },
 })
 
-const emit = defineEmits(['next'])
+const emit = defineEmits(['submit', 'next'])
+
+const actividadActual = computed(() => props.actividad || props.activity || {})
 
 const letters = ['A', 'B', 'C', 'D', 'E', 'F']
 
@@ -113,20 +121,23 @@ const correct = ref(false)
 const pool = ref([])
 const chosen = ref([])
 
-const isChoice = computed(() => ['choice', 'fix'].includes(props.activity.type))
-const isOrder = computed(() => props.activity.type === 'order')
-const isText = computed(() => props.activity.type === 'fill' || props.activity.type === 'write')
+const isChoice = computed(() => ['choice', 'fix'].includes(actividadActual.value.type))
+const isOrder = computed(() => actividadActual.value.type === 'order')
+const isText = computed(() => actividadActual.value.type === 'fill' || actividadActual.value.type === 'write')
 
 const hint = computed(() => {
-  if (props.activity.type === 'write') return 'Escribí tu código y tocá Comprobar.'
+  if (actividadActual.value.type === 'write') return 'Escribí tu código y tocá Comprobar.'
   return 'Escribí lo que falta y tocá Comprobar.'
 })
 
 const placeholder = computed(() =>
-  props.activity.type === 'write' ? 'let miVariable = …;' : 'Escribí el fragmento que falta…',
+  actividadActual.value.type === 'write' ? 'let miVariable = …;' : 'Escribí el fragmento que falta…',
 )
 
 const wrongMessage = computed(() => {
+  if (actividadActual.value.explanation) {
+    return actividadActual.value.explanation
+  }
   if (isOrder.value)
     return 'Algunas líneas no están en el orden correcto. Revisá e intentalo de nuevo.'
   return 'Revisá tu respuesta e intentalo de nuevo.'
@@ -135,15 +146,15 @@ const wrongMessage = computed(() => {
 const canCheck = computed(() => {
   if (!submitted.value) {
     if (isText.value) return typed.value.trim().length > 0
-    if (isOrder.value) return chosen.value.length === props.activity.lines.length
+    if (isOrder.value) return chosen.value.length === (actividadActual.value.lines?.length || 0)
     return selected.value !== -1
   }
   return true
 })
 
 const actionLabel = computed(() => {
-  if (!submitted.value) return 'Comprobar'
-  return correct.value ? 'Continuar' : 'Reintentar'
+  if (!submitted.value) return 'Confirmar'
+  return 'Continuar'
 })
 
 const feedbackClass = computed(() =>
@@ -151,7 +162,8 @@ const feedbackClass = computed(() =>
 )
 
 function initOrder() {
-  const shuffled = props.activity.lines
+  const lines = actividadActual.value.lines || []
+  const shuffled = lines
     .map((line, index) => ({ line, index }))
     .sort(() => Math.random() - 0.5)
   pool.value = shuffled
@@ -167,7 +179,7 @@ function reset() {
 }
 
 watch(
-  () => props.activity.id,
+  () => actividadActual.value?.id,
   () => reset(),
   { immediate: true },
 )
@@ -197,21 +209,21 @@ function normalize(value) {
 function isAnswerCorrect() {
   if (isOrder.value) {
     return (
-      chosen.value.length === props.activity.lines.length &&
+      chosen.value.length === (actividadActual.value.lines?.length || 0) &&
       chosen.value.every((item, index) => item.index === index)
     )
   }
   if (isText.value) {
-    return props.activity.expected.some((answer) => normalize(typed.value) === normalize(answer))
+    return (actividadActual.value.expected || []).some((answer) => normalize(typed.value) === normalize(answer))
   }
-  return selected.value === props.activity.answer
+  return selected.value === actividadActual.value.answer
 }
 
 function optionClasses(index) {
   if (!submitted.value) {
     return { 'is-selected': selected.value === index }
   }
-  const isAnswer = index === props.activity.answer
+  const isAnswer = index === actividadActual.value.answer
   const isWrongChoice = selected.value === index && !isAnswer
   return { 'is-answer': isAnswer, 'is-wrong-choice': isWrongChoice }
 }
@@ -220,30 +232,28 @@ function handleAction() {
   if (!submitted.value) {
     submitted.value = true
     correct.value = isAnswerCorrect()
+    emit('submit', correct.value)
     return
   }
-  if (correct.value) {
-    emit('next')
-    return
-  }
-  if (isChoice.value) reset()
-  else {
-    submitted.value = false
-    if (isOrder.value) initOrder()
-    else typed.value = ''
-  }
+
+  emit('next')
 }
 </script>
 
 <style scoped>
+.activity-runner {
+  display: grid;
+  gap: var(--k-space-4);
+}
+
 .activity-statement {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1.45;
 }
 
 .activity-code {
-  margin-top: var(--k-space-4);
+  margin-top: var(--k-space-1);
 }
 
 .options {
@@ -258,15 +268,16 @@ function handleAction() {
   gap: 14px;
   width: 100%;
   padding: 14px 16px;
-  border-radius: 14px;
+  border-radius: 16px;
   border: 2px solid var(--k-line);
-  background: var(--k-surface-2);
+  background: linear-gradient(180deg, rgba(24, 9, 31, 0.96), rgba(12, 6, 17, 1));
   color: var(--k-text);
   cursor: pointer;
   text-align: left;
   transition:
     border-color 0.12s ease,
-    background 0.12s ease;
+    background 0.12s ease,
+    transform 0.08s ease;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -355,7 +366,7 @@ function handleAction() {
   padding: 12px 14px;
   border-radius: 12px;
   border: 1.5px solid var(--k-line);
-  background: var(--k-surface);
+  background: rgba(17, 10, 22, 0.95);
   color: #d9c8ef;
   font-family: var(--k-font-code);
   font-size: 12.5px;

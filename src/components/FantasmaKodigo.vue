@@ -4,10 +4,10 @@
 
 <script setup>
 import { computed } from 'vue'
-import ghostBored from '@/assets/img/fantasmaAburrido.png'
-import ghostHappy from '@/assets/img/fantasmaFeliz.png'
-import ghostNormal from '@/assets/img/fantasmaNormal.png'
-import ghostSad from '@/assets/img/fantasmaTriste.png'
+import ghostBored from '@/assets/img/logo/fantasmaAburrido.png'
+import ghostHappy from '@/assets/img/logo/fantasmaFeliz.png'
+import ghostNormal from '@/assets/img/logo/fantasmaNormal.png'
+import ghostSad from '@/assets/img/logo/fantasmaTriste.png'
 
 const props = defineProps({
   size: {
