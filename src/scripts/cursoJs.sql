@@ -1,14 +1,30 @@
+-- Seed: curso JavaScript + 5 unidades para Kodigo.
+-- La unidad "Variables y datos" es la unica con contenido completo (2 lecciones
+-- publicadas y 6 preguntas de opcion multiple). Las demas unidades existen en la
+-- base y quedan marcadas como 'bloqueada' hasta que se desarrolle su contenido.
+--
+-- Orden de ejecucion: primero db.sql y despues este archivo.
+-- Los ids fijos con ceros son legibles y estables para relacionar los datos.
+
 insert into cursos (
     id,
     nombre,
     descripcion,
+    lema,
+    monograma,
+    logo,
+    color_acento,
     orden,
     estado_publicacion
 )
 values (
     '10000000-0000-0000-0000-000000000001',
     'JavaScript',
-    'Aprende los fundamentos de JavaScript desde cero.',
+    'Creá tus primeros programas en el lenguaje más usado del mundo.',
+    'El lenguaje de la web',
+    'JS',
+    'javascriptLogo',
+    '#f7df1e',
     1,
     'publicado'
 );
@@ -25,16 +41,16 @@ values
 (
     '20000000-0000-0000-0000-000000000001',
     '10000000-0000-0000-0000-000000000001',
-    'Introducción a JavaScript',
-    'Conceptos básicos y primeros pasos con JavaScript.',
+    'Variables y datos',
+    'Guardá información y conocé los tipos de datos básicos de JavaScript.',
     1,
     'publicado'
 ),
 (
     '20000000-0000-0000-0000-000000000002',
     '10000000-0000-0000-0000-000000000001',
-    'Variables y datos',
-    'Variables, constantes y tipos de datos.',
+    'Operadores',
+    'Calculá con números y compará valores usando operadores.',
     2,
     'bloqueada'
 ),
@@ -42,7 +58,7 @@ values
     '20000000-0000-0000-0000-000000000003',
     '10000000-0000-0000-0000-000000000001',
     'Condicionales',
-    'Decisiones y estructuras condicionales.',
+    'Tomá decisiones en tu código con if y else.',
     3,
     'bloqueada'
 ),
@@ -50,7 +66,7 @@ values
     '20000000-0000-0000-0000-000000000004',
     '10000000-0000-0000-0000-000000000001',
     'Bucles',
-    'Repeticiones y ciclos en JavaScript.',
+    'Repetí tareas automáticamente con for y while.',
     4,
     'bloqueada'
 ),
@@ -58,7 +74,7 @@ values
     '20000000-0000-0000-0000-000000000005',
     '10000000-0000-0000-0000-000000000001',
     'Funciones',
-    'Creación y utilización de funciones.',
+    'Organizá tu código en bloques reutilizables.',
     5,
     'bloqueada'
 );
@@ -76,18 +92,18 @@ values
 (
     '30000000-0000-0000-0000-000000000001',
     '20000000-0000-0000-0000-000000000001',
-    '¿Qué es JavaScript?',
-    'JavaScript es un lenguaje de programación utilizado principalmente para agregar comportamiento e interactividad a las páginas web.',
-    'console.log("Hola mundo");',
+    'Variables y asignación',
+    'Una variable guarda un valor para reutilizarlo después. En JavaScript usamos let para declarar una variable y luego le asignamos un valor.',
+    'let nombre = "Ana";\nlet edad = 18;\nconsole.log(nombre);\nconsole.log(edad);',
     1,
     'publicado'
 ),
 (
     '30000000-0000-0000-0000-000000000002',
     '20000000-0000-0000-0000-000000000001',
-    'Primeros pasos',
-    'En JavaScript podemos escribir instrucciones que se ejecutan una después de otra. Una de las formas más simples de mostrar información es utilizando console.log.',
-    'console.log("Hola");\nconsole.log("Bienvenido a Kodigo");',
+    'Operadores y cálculo',
+    'Los operadores permiten combinar valores y hacer cálculos. La suma, resta, multiplicación y división son las operaciones más comunes.',
+    'let precio = 10;\nlet cantidad = 3;\nlet total = precio * cantidad;\nconsole.log(total);',
     2,
     'publicado'
 );
@@ -104,7 +120,7 @@ values
 (
     '40000000-0000-0000-0000-000000000001',
     '30000000-0000-0000-0000-000000000001',
-    '¿Para qué se utiliza principalmente JavaScript en una página web?',
+    '¿Cuál de estas líneas declara correctamente una variable llamada edad con el valor 18?',
     'multiple_choice',
     1,
     'publicado'
@@ -112,7 +128,7 @@ values
 (
     '40000000-0000-0000-0000-000000000002',
     '30000000-0000-0000-0000-000000000001',
-    '¿Cuál de las siguientes opciones es una instrucción válida de JavaScript?',
+    '¿Qué valor completa la sentencia para guardar el nombre de una persona?\nlet nombre = ___;',
     'multiple_choice',
     2,
     'publicado'
@@ -120,7 +136,7 @@ values
 (
     '40000000-0000-0000-0000-000000000003',
     '30000000-0000-0000-0000-000000000001',
-    '¿Qué función permite mostrar un mensaje en la consola?',
+    '¿Qué opción representa una asignación válida de una constante?',
     'multiple_choice',
     3,
     'publicado'
@@ -128,7 +144,7 @@ values
 (
     '40000000-0000-0000-0000-000000000004',
     '30000000-0000-0000-0000-000000000002',
-    '¿Qué hace console.log("Hola");?',
+    '¿Qué resultado devuelve 12 + 5?',
     'multiple_choice',
     1,
     'publicado'
@@ -136,7 +152,7 @@ values
 (
     '40000000-0000-0000-0000-000000000005',
     '30000000-0000-0000-0000-000000000002',
-    '¿Qué palabra se utiliza para declarar una variable cuyo valor puede cambiar?',
+    '¿Qué operador completa la sentencia para calcular el resto de la división?\nlet resto = 10 ___ 3;',
     'multiple_choice',
     2,
     'publicado'
@@ -144,7 +160,7 @@ values
 (
     '40000000-0000-0000-0000-000000000006',
     '30000000-0000-0000-0000-000000000002',
-    '¿Cuál es el resultado de ejecutar console.log(2 + 3);?',
+    '¿Cuál de estas expresiones calcula correctamente el total de 4 × 3?',
     'multiple_choice',
     3,
     'publicado'
@@ -160,153 +176,154 @@ values
 (
     '50000000-0000-0000-0000-000000000001',
     '40000000-0000-0000-0000-000000000001',
-    'Agregar interactividad y comportamiento a una página web',
+    'let edad = 18;',
     1
 ),
 (
     '50000000-0000-0000-0000-000000000002',
     '40000000-0000-0000-0000-000000000001',
-    'Crear únicamente imágenes',
+    'let 18 = edad;',
     2
 ),
 (
     '50000000-0000-0000-0000-000000000003',
     '40000000-0000-0000-0000-000000000001',
-    'Reemplazar HTML',
+    'const edad;',
     3
 ),
 (
     '50000000-0000-0000-0000-000000000004',
     '40000000-0000-0000-0000-000000000001',
-    'Crear archivos de texto',
+    'edad = 18;',
     4
 ),
 
 (
     '50000000-0000-0000-0000-000000000005',
     '40000000-0000-0000-0000-000000000002',
-    'console.log("Hola");',
+    '"Ana"',
     1
 ),
 (
     '50000000-0000-0000-0000-000000000006',
     '40000000-0000-0000-0000-000000000002',
-    '<console>Hola</console>',
+    'Ana',
     2
 ),
 (
     '50000000-0000-0000-0000-000000000007',
     '40000000-0000-0000-0000-000000000002',
-    'print.console("Hola");',
+    '18',
     3
 ),
 (
     '50000000-0000-0000-0000-000000000008',
     '40000000-0000-0000-0000-000000000002',
-    'javascript.console("Hola");',
+    'let',
     4
 ),
 
 (
     '50000000-0000-0000-0000-000000000009',
     '40000000-0000-0000-0000-000000000003',
-    'console.log()',
+    'const apellido = "Pérez";',
     1
 ),
 (
     '50000000-0000-0000-0000-000000000010',
     '40000000-0000-0000-0000-000000000003',
-    'console.show()',
+    'const = "Pérez";',
     2
 ),
 (
     '50000000-0000-0000-0000-000000000011',
     '40000000-0000-0000-0000-000000000003',
-    'print()',
+    'let const = "Pérez";',
     3
 ),
 (
     '50000000-0000-0000-0000-000000000012',
     '40000000-0000-0000-0000-000000000003',
-    'show.console()',
+    'apellido = const;',
     4
 ),
 
 (
     '50000000-0000-0000-0000-000000000013',
     '40000000-0000-0000-0000-000000000004',
-    'Muestra Hola en la consola',
+    '17',
     1
 ),
 (
     '50000000-0000-0000-0000-000000000014',
     '40000000-0000-0000-0000-000000000004',
-    'Crea una página HTML',
+    '7',
     2
 ),
 (
     '50000000-0000-0000-0000-000000000015',
     '40000000-0000-0000-0000-000000000004',
-    'Elimina la consola',
+    '60',
     3
 ),
 (
     '50000000-0000-0000-0000-000000000016',
     '40000000-0000-0000-0000-000000000004',
-    'Cierra JavaScript',
+    '125',
     4
 ),
 
 (
     '50000000-0000-0000-0000-000000000017',
     '40000000-0000-0000-0000-000000000005',
-    'let',
+    '%',
     1
 ),
 (
     '50000000-0000-0000-0000-000000000018',
     '40000000-0000-0000-0000-000000000005',
-    'constant',
+    '/',
     2
 ),
 (
     '50000000-0000-0000-0000-000000000019',
     '40000000-0000-0000-0000-000000000005',
-    'variable',
+    '+',
     3
 ),
 (
     '50000000-0000-0000-0000-000000000020',
     '40000000-0000-0000-0000-000000000005',
-    'change',
+    '*',
     4
 ),
 
 (
     '50000000-0000-0000-0000-000000000021',
     '40000000-0000-0000-0000-000000000006',
-    '5',
+    '4 * 3',
     1
 ),
 (
     '50000000-0000-0000-0000-000000000022',
     '40000000-0000-0000-0000-000000000006',
-    '23',
+    '4 + 3',
     2
 ),
 (
     '50000000-0000-0000-0000-000000000023',
     '40000000-0000-0000-0000-000000000006',
-    '6',
+    '4 / 3',
     3
 ),
 (
     '50000000-0000-0000-0000-000000000024',
     '40000000-0000-0000-0000-000000000006',
-    '2 + 3',
+    '4 % 3',
     4
 );
 
+-- Cada pregunta tiene exactamente una opcion correcta y su explicacion.
 insert into soluciones (
     pregunta_id,
     opcion_correcta_id,
@@ -316,62 +333,30 @@ values
 (
     '40000000-0000-0000-0000-000000000001',
     '50000000-0000-0000-0000-000000000001',
-    'JavaScript permite agregar comportamiento e interactividad a las páginas web.'
+    'La sintaxis correcta es declarar la variable con let, poner el nombre y luego asignarle el valor con =.'
 ),
 (
     '40000000-0000-0000-0000-000000000002',
     '50000000-0000-0000-0000-000000000005',
-    'console.log es una instrucción válida de JavaScript que permite mostrar información en la consola.'
+    'Los textos en JavaScript deben ir entre comillas. Por eso el valor correcto es "Ana".'
 ),
 (
     '40000000-0000-0000-0000-000000000003',
     '50000000-0000-0000-0000-000000000009',
-    'console.log() permite mostrar información en la consola del navegador.'
+    'const se usa para declarar una constante, seguida del nombre y el valor. La sintaxis es const nombre = valor;'
 ),
 (
     '40000000-0000-0000-0000-000000000004',
     '50000000-0000-0000-0000-000000000013',
-    'console.log("Hola"); muestra el texto Hola en la consola.'
+    'La suma combina ambos valores numéricos y da 17.'
 ),
 (
     '40000000-0000-0000-0000-000000000005',
     '50000000-0000-0000-0000-000000000017',
-    'let permite declarar una variable cuyo valor puede modificarse posteriormente.'
+    'El operador % devuelve el resto de la división: 10 % 3 da 1.'
 ),
 (
     '40000000-0000-0000-0000-000000000006',
     '50000000-0000-0000-0000-000000000021',
-    'La expresión 2 + 3 da como resultado 5.'
-);
-
-insert into logros (
-    nombre,
-    descripcion,
-    experiencia_recompensa
-)
-values
-(
-    'Primeros pasos',
-    'Completa tu primera lección.',
-    20
-),
-(
-    'Buen comienzo',
-    'Aprueba dos lecciones.',
-    40
-),
-(
-    'En racha',
-    'Responde correctamente varias actividades consecutivas.',
-    50
-),
-(
-    'Primer nivel',
-    'Alcanza el nivel 2.',
-    100
-),
-(
-    'Aprendiz de código',
-    'Completa cinco lecciones.',
-    100
+    'La multiplicación usa el operador *. 4 * 3 equivale a 12.'
 );

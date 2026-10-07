@@ -1,84 +1,162 @@
 <template>
   <div class="k-screen">
-    <EncabezadoApp :titulo="leccion?.title ?? 'Lección'" :back="linkUnidad" />
+    <EncabezadoApp :titulo="leccion?.titulo ?? 'Lección'" :back="linkUnidad" />
 
-    <main v-if="leccion" class="k-container lesson">
-      <p class="k-eyebrow">Clase · {{ tituloUnidad }}</p>
+    <main class="k-container lesson">
+      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
 
-      <BurbujaFantasma :mensaje="leccion.explanation" :tamano-fantasma="64" class="lesson-bubble">
-        <BloqueCodigo v-if="leccion.exampleCode" :code="leccion.exampleCode" class="lesson-code" />
-      </BurbujaFantasma>
+      <EstadoPantalla
+        v-else-if="estado === 'error'"
+        tipo="error"
+        titulo="No pudimos cargar la lección"
+        :mensaje="mensajeError"
+        accion-label="Reintentar"
+        @accion="cargar"
+      />
 
-      <div class="lesson-actions">
-        <button
-          v-if="primeraActividad"
-          type="button"
-          class="k-btn k-btn--primary k-btn--block k-btn--lg"
-          @click="iniciarActividades"
-        >
-          <q-icon name="play_arrow" size="20px" />
-          {{ etiquetaPrimeraActividad }}
-        </button>
-        <RouterLink :to="linkUnidad" class="k-link lesson-back">Volver a la unidad</RouterLink>
-      </div>
-    </main>
+      <EstadoPantalla
+        v-else-if="estado === 'inexistente'"
+        tipo="inexistente"
+        titulo="Lección no encontrada"
+        mensaje="La lección que buscás no existe o ya no está disponible."
+        accion-label="Ver cursos"
+        @accion="verCursos"
+      />
 
-    <main v-else class="k-container lesson lesson-error">
-      <div class="error-card">
-        <p class="k-eyebrow">Lección no encontrada</p>
-        <h1 class="k-h1">No pudimos abrir esta lección</h1>
-        <p class="k-muted">La ruta solicitada no existe o ya no está disponible.</p>
-        <RouterLink to="/courses" class="k-btn k-btn--primary k-btn--block k-btn--lg error-button">
-          Volver a cursos
-        </RouterLink>
-      </div>
+      <template v-else-if="estado === 'listo' && leccion && unidad">
+        <p class="k-eyebrow">Clase · {{ tituloUnidad }}</p>
+
+        <BurbujaFantasma :mensaje="leccion.explicacion" :tamano-fantasma="64" class="lesson-bubble">
+          <BloqueCodigo
+            v-if="leccion.ejemploCodigo"
+            :code="leccion.ejemploCodigo"
+            class="lesson-code"
+          />
+        </BurbujaFantasma>
+
+        <div v-if="estadoLeccion === 'bloqueada'" class="lesson-locked-note">
+          <q-icon name="lock" size="18px" />
+          Completá la clase anterior para desbloquear esta.
+        </div>
+
+        <div v-else class="lesson-actions">
+          <button
+            v-if="hayPreguntas"
+            type="button"
+            class="k-btn k-btn--primary k-btn--block k-btn--lg"
+            @click="iniciarPractica"
+          >
+            <q-icon name="play_arrow" size="20px" />
+            Comenzar actividad
+          </button>
+
+          <EstadoPantalla
+            v-else
+            tipo="vacio"
+            titulo="Esta clase aún no tiene preguntas"
+            mensaje="La práctica de esta clase va a estar disponible pronto."
+          />
+
+          <RouterLink :to="linkUnidad" class="k-link lesson-back">Volver a la unidad</RouterLink>
+        </div>
+      </template>
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
 import BloqueCodigo from '@/components/BloqueCodigo.vue'
 import BurbujaFantasma from '@/components/BurbujaFantasma.vue'
+import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import {
-  rutaActividad,
-  obtenerActividadesPorLeccion,
   obtenerLeccion,
-  obtenerEstadoLeccion,
+  obtenerLecciones,
+  obtenerPreguntas,
   obtenerUnidadPorId,
-  rutaUnidad,
+  rutaLeccion,
+  rutaPregunta,
 } from '@/services/catalogo'
 
 const route = useRoute()
 const router = useRouter()
 
-const leccion = computed(() => obtenerLeccion(route.params.lessonId))
+const estado = ref('cargando')
+const mensajeError = ref('')
+const leccion = ref(null)
+const unidad = ref(null)
+const preguntas = ref([])
+const estadoLeccion = ref('disponible')
 
-const actividades = computed(() => (leccion.value ? obtenerActividadesPorLeccion(leccion.value.id) : []))
-
-const primeraActividad = computed(() => actividades.value[0] || null)
-
-const estadoLeccion = computed(() => (leccion.value ? obtenerEstadoLeccion(leccion.value.id) : 'locked'))
-
-const linkUnidad = computed(() =>
-  leccion.value ? rutaUnidad(leccion.value.unitId) : { name: 'cursos' },
-)
-
-const tituloUnidad = computed(() => {
-  if (!leccion.value) return ''
-  const unidad = obtenerUnidadPorId(leccion.value.unitId)
-  return unidad ? unidad.title : ''
+const linkUnidad = computed(() => {
+  if (leccion.value && unidad.value) {
+    return {
+      name: 'unidad',
+      params: { courseId: unidad.value.cursoId, unitId: unidad.value.id },
+    }
+  }
+  return { name: 'cursos' }
 })
 
-const etiquetaPrimeraActividad = computed(() =>
-  actividades.value.length > 1 ? 'Comenzar actividades' : 'Comenzar actividad',
-)
+const tituloUnidad = computed(() => unidad.value?.nombre ?? '')
 
-function iniciarActividades() {
-  if (!leccion.value || estadoLeccion.value === 'locked' || !primeraActividad.value) return
-  router.push(rutaActividad(leccion.value.id, primeraActividad.value.id))
+const hayPreguntas = computed(() => preguntas.value.length > 0)
+
+async function cargar() {
+  estado.value = 'cargando'
+  mensajeError.value = ''
+  const lessonId = route.params.lessonId
+  try {
+    if (!lessonId) {
+      estado.value = 'inexistente'
+      return
+    }
+
+    const dataLeccion = await obtenerLeccion(lessonId)
+    if (!dataLeccion) {
+      estado.value = 'inexistente'
+      return
+    }
+    leccion.value = dataLeccion
+
+    const dataUnidad = await obtenerUnidadPorId(dataLeccion.unidadId)
+    if (!dataUnidad) {
+      estado.value = 'inexistente'
+      return
+    }
+    unidad.value = dataUnidad
+
+    // Rutas legadas: /lesson/:lessonId redirige a la ruta canónica.
+    if (!route.params.courseId) {
+      router.replace(rutaLeccion(dataLeccion, dataUnidad))
+    }
+
+    const dataPreguntas = await obtenerPreguntas(lessonId)
+    preguntas.value = dataPreguntas
+
+    const leccionesUnidad = await obtenerLecciones(dataUnidad.id)
+    const propia = leccionesUnidad.find((l) => l.id === dataLeccion.id)
+    estadoLeccion.value = propia?.estado ?? dataLeccion.estado
+    if (estadoLeccion.value === 'aprobada') estadoLeccion.value = 'completada'
+
+    estado.value = 'listo'
+  } catch (error) {
+    mensajeError.value = error.message
+    estado.value = 'error'
+  }
+}
+
+onMounted(cargar)
+
+function iniciarPractica() {
+  if (!leccion.value || !unidad.value || !preguntas.value.length) return
+  router.push(rutaPregunta(leccion.value, unidad.value, preguntas.value[0].id))
+}
+
+function verCursos() {
+  router.push('/courses')
 }
 </script>
 
@@ -96,39 +174,27 @@ function iniciarActividades() {
 }
 
 .lesson-actions {
+  display: grid;
+  gap: var(--k-space-4);
   margin-top: var(--k-space-6);
 }
 
 .lesson-back {
   display: block;
   text-align: center;
-  margin-top: var(--k-space-4);
 }
 
-.lesson-error {
-  display: grid;
-  place-items: center;
-}
-
-.error-card {
-  width: 100%;
-  max-width: 360px;
-  padding: 28px 22px;
-  border-radius: var(--k-radius);
-  border: 1px solid var(--k-line);
-  background: var(--k-surface-2);
-  text-align: center;
-}
-
-.error-card h1 {
-  margin-top: var(--k-space-3);
-}
-
-.error-card p {
-  margin-top: var(--k-space-3);
-}
-
-.error-button {
-  margin-top: var(--k-space-5);
+.lesson-locked-note {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-3);
+  margin-top: var(--k-space-6);
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(142, 5, 194, 0.08);
+  border: 1px solid rgba(142, 5, 194, 0.22);
+  color: var(--k-text-2);
+  font-size: 13px;
+  font-weight: 600;
 }
 </style>

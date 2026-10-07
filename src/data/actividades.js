@@ -3,7 +3,8 @@ export const activities = [
     id: 'activity-variables-1',
     lessonId: 'lesson-variables-basicas',
     type: 'choice',
-    statement: '¿Cuál de estas líneas declara correctamente una variable llamada edad con el valor 18?',
+    statement:
+      '¿Cuál de estas líneas declara correctamente una variable llamada edad con el valor 18?',
     options: ['let edad = 18;', 'let 18 = edad;', 'const edad;', 'edad = 18;'],
     answer: 0,
     explanation:
@@ -24,7 +25,12 @@ export const activities = [
     lessonId: 'lesson-variables-basicas',
     type: 'choice',
     statement: '¿Qué opción representa una asignación válida de una constante?',
-    options: ['const apellido = "Pérez";', 'const = "Pérez";', 'let const = "Pérez";', 'apellido = const;'],
+    options: [
+      'const apellido = "Pérez";',
+      'const = "Pérez";',
+      'let const = "Pérez";',
+      'apellido = const;',
+    ],
     answer: 0,
     explanation:
       'const se usa para declarar una constante, seguida del nombre y el valor. La sintaxis es const nombre = valor;',

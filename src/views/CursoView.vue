@@ -2,67 +2,125 @@
   <div class="k-screen">
     <EncabezadoApp titulo="Curso" :back="true" />
 
-    <main v-if="curso" class="k-container course">
-      <section class="course-hero">
-        <LogoCurso :curso="curso" tone="hero" />
-        <h1 class="k-h1 course-hero-name">{{ curso.name }}</h1>
-        <p class="course-hero-tagline">{{ curso.tagline }}</p>
-        <p class="k-muted course-hero-desc">{{ curso.description }}</p>
+    <main class="k-container course">
+      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
 
-        <div v-if="unidades.length" class="course-hero-progress">
-          <div class="k-progress">
-            <i :style="{ width: progresoCurso + '%' }"></i>
-          </div>
-          <div class="course-hero-meta">
-            <span>{{ unidades.length }} unidades</span>
-            <span>{{ progresoCurso }}% completado</span>
-          </div>
-        </div>
-      </section>
+      <EstadoPantalla
+        v-else-if="estado === 'error'"
+        tipo="error"
+        titulo="No pudimos cargar el curso"
+        :mensaje="mensajeError"
+        accion-label="Reintentar"
+        @accion="cargar"
+      />
 
-      <section class="units">
-        <p class="k-eyebrow">Recorrido de aprendizaje</p>
-        <div class="units-list">
-          <TarjetaUnidad
-            v-for="unidad in unidades"
-            :key="unidad.id"
-            :unidad="unidad"
-            :lessons="contarLecciones(unidad.id)"
-            @select="abrirUnidad"
+      <EstadoPantalla
+        v-else-if="estado === 'inexistente'"
+        tipo="inexistente"
+        titulo="Curso no encontrado"
+        mensaje="El curso que buscás no existe o ya no está publicado."
+        accion-label="Ver cursos"
+        @accion="verCursos"
+      />
+
+      <template v-else-if="estado === 'listo' && curso">
+        <section class="course-hero">
+          <LogoCurso :curso="curso" tone="hero" />
+          <h1 class="k-h1 course-hero-name">{{ curso.nombre }}</h1>
+          <p class="course-hero-tagline">{{ curso.lema }}</p>
+          <p class="k-muted course-hero-desc">{{ curso.descripcion }}</p>
+
+          <div v-if="unidades.length" class="course-hero-progress">
+            <div class="k-progress">
+              <i :style="{ width: progresoCurso + '%' }"></i>
+            </div>
+            <div class="course-hero-meta">
+              <span>{{ unidades.length }} unidades</span>
+              <span>{{ progresoCurso }}% completado</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="units">
+          <p class="k-eyebrow">Recorrido de aprendizaje</p>
+
+          <EstadoPantalla
+            v-if="estadoUnidades === 'vacio'"
+            tipo="vacio"
+            titulo="Este curso aún no tiene unidades"
+            mensaje="Las unidades del curso van a aparecer acá cuando estén publicadas."
           />
-        </div>
-      </section>
+
+          <div v-else class="units-list">
+            <TarjetaUnidad
+              v-for="unidad in unidades"
+              :key="unidad.id"
+              :unit="unidad"
+              :lessons="unidad.cantidadLecciones"
+              @select="abrirUnidad"
+            />
+          </div>
+        </section>
+      </template>
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
+import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import LogoCurso from '@/components/LogoCurso.vue'
 import TarjetaUnidad from '@/components/TarjetaUnidad.vue'
-import { obtenerCurso, obtenerLeccionesPorUnidad, obtenerUnidadesPorCurso, rutaUnidad } from '@/services/catalogo'
+import { obtenerCurso, obtenerUnidades, rutaUnidad } from '@/services/catalogo'
 
 const route = useRoute()
 const router = useRouter()
 
-const curso = computed(() => obtenerCurso(route.params.courseId))
-
-const unidades = computed(() => (curso.value ? obtenerUnidadesPorCurso(curso.value.id) : []))
+const estado = ref('cargando')
+const estadoUnidades = ref('cargando')
+const mensajeError = ref('')
+const curso = ref(null)
+const unidades = ref([])
 
 const progresoCurso = computed(() => {
   if (!unidades.value.length) return 0
-  const total = unidades.value.reduce((sum, unidad) => sum + unidad.progress, 0)
+  const total = unidades.value.reduce((suma, unidad) => suma + unidad.progreso, 0)
   return Math.round(total / unidades.value.length)
 })
 
-function contarLecciones(unidadId) {
-  return obtenerLeccionesPorUnidad(unidadId).length
+async function cargar() {
+  estado.value = 'cargando'
+  estadoUnidades.value = 'cargando'
+  mensajeError.value = ''
+  try {
+    const dataCurso = await obtenerCurso(route.params.courseId)
+    if (!dataCurso) {
+      estado.value = 'inexistente'
+      return
+    }
+    curso.value = dataCurso
+
+    const dataUnidades = await obtenerUnidades(dataCurso.id)
+    unidades.value = dataUnidades
+    estadoUnidades.value = dataUnidades.length ? 'listo' : 'vacio'
+    estado.value = 'listo'
+  } catch (error) {
+    mensajeError.value = error.message
+    estado.value = 'error'
+  }
 }
 
+onMounted(cargar)
+
 function abrirUnidad(unidadId) {
-  router.push(rutaUnidad(unidadId))
+  const unidad = unidades.value.find((u) => u.id === unidadId)
+  if (unidad) router.push(rutaUnidad(unidad))
+}
+
+function verCursos() {
+  router.push('/courses')
 }
 </script>
 

@@ -1,5 +1,13 @@
 const files = import.meta.glob(
-  ['./**/*.{png,jpg,jpeg,svg,webp,gif}', './**/*.png', './**/*.jpg', './**/*.jpeg', './**/*.svg', './**/*.webp', './**/*.gif'],
+  [
+    './**/*.{png,jpg,jpeg,svg,webp,gif}',
+    './**/*.png',
+    './**/*.jpg',
+    './**/*.jpeg',
+    './**/*.svg',
+    './**/*.webp',
+    './**/*.gif',
+  ],
   { eager: true, import: 'default' },
 )
 

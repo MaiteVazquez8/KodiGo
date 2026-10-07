@@ -4,7 +4,7 @@
     :class="{ 'is-locked': !cursoDisponible }"
     role="button"
     tabindex="0"
-    aria-label="Abrir curso {{ curso.name }}"
+    aria-label="Abrir curso {{ curso.nombre }}"
     @click="emitir('select', curso.id)"
     @keyup.enter="emitir('select', curso.id)"
   >
@@ -12,18 +12,18 @@
 
     <div class="course-card-body">
       <div class="course-card-head">
-        <h2 class="course-card-title">{{ curso.name }}</h2>
+        <h2 class="course-card-title">{{ curso.nombre }}</h2>
         <span class="course-badge" :class="{ 'badge-locked': !cursoDisponible }">
           {{ cursoDisponible ? 'Disponible' : 'Próximamente' }}
         </span>
       </div>
-      <p class="course-card-tagline">{{ curso.tagline }}</p>
+      <p class="course-card-tagline">{{ curso.lema || curso.descripcion }}</p>
 
       <div v-if="cursoDisponible" class="course-card-progress">
         <div class="k-progress">
-          <i :style="{ width: curso.progress + '%' }"></i>
+          <i :style="{ width: curso.progreso + '%' }"></i>
         </div>
-        <span class="course-card-percent">{{ curso.progress }}%</span>
+        <span class="course-card-percent">{{ curso.progreso }}%</span>
       </div>
     </div>
 
@@ -44,7 +44,9 @@ const props = defineProps({
 
 const emit = defineEmits(['select'])
 
-const cursoDisponible = computed(() => props.curso.status === 'available')
+const cursoDisponible = computed(
+  () => props.curso.disponible || props.curso.estadoPublicacion === 'publicado',
+)
 
 function emitir(evento, valor) {
   emit(evento, valor)

@@ -2,109 +2,176 @@
   <div class="k-screen">
     <EncabezadoApp titulo="Resultados" :back="linkUnidad" />
 
-    <main v-if="leccion" class="k-container results">
-      <div class="results-card">
-        <p class="k-eyebrow">Lección {{ tituloLeccion }}</p>
+    <main class="k-container results">
+      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
 
-        <div class="results-summary" :class="{ 'is-passed': resultados.passed }">
-          <p class="results-label">{{ resultados.passed ? '¡Lección aprobada!' : 'Lección completada' }}</p>
-          <h1 class="k-h1">{{ resultados.percentage }}%</h1>
-          <p class="results-subtext">
-            {{ resultados.correct }} de {{ resultados.total }} respuestas correctas.
-          </p>
+      <EstadoPantalla
+        v-else-if="estado === 'error'"
+        tipo="error"
+        titulo="No pudimos cargar el resultado"
+        :mensaje="mensajeError"
+        accion-label="Reintentar"
+        @accion="cargar"
+      />
+
+      <EstadoPantalla
+        v-else-if="estado === 'inexistente'"
+        tipo="inexistente"
+        titulo="Resultado no disponible"
+        mensaje="La lección no existe o aún no se completó la actividad."
+        accion-label="Ver cursos"
+        @accion="verCursos"
+      />
+
+      <template v-else-if="estado === 'listo' && leccion">
+        <div class="results-card">
+          <p class="k-eyebrow">Lección {{ tituloLeccion }}</p>
+
+          <div class="results-summary" :class="{ 'is-passed': resultados.aprobada }">
+            <p class="results-label">
+              {{ resultados.aprobada ? '¡Lección aprobada!' : 'Lección completada' }}
+            </p>
+            <h1 class="k-h1">{{ resultados.porcentaje }}%</h1>
+            <p class="results-subtext">
+              {{ resultados.correctas }} de {{ resultados.total }} respuestas correctas.
+            </p>
+          </div>
+
+          <div class="results-grid">
+            <div class="result-tile">
+              <span>Total</span>
+              <strong>{{ resultados.total }}</strong>
+            </div>
+            <div class="result-tile">
+              <span>Correctas</span>
+              <strong>{{ resultados.correctas }}</strong>
+            </div>
+            <div class="result-tile">
+              <span>Incorrectas</span>
+              <strong>{{ resultados.incorrectas }}</strong>
+            </div>
+            <div class="result-tile">
+              <span>Aciertos</span>
+              <strong>{{ resultados.porcentaje }}%</strong>
+            </div>
+          </div>
+
+          <div class="results-actions">
+            <button
+              type="button"
+              class="k-btn k-btn--primary k-btn--block k-btn--lg"
+              @click="volverUnidad"
+            >
+              Volver a la unidad
+            </button>
+            <button
+              type="button"
+              class="k-btn k-btn--ghost k-btn--block"
+              @click="reintentarLeccion"
+            >
+              Intentar nuevamente
+            </button>
+          </div>
         </div>
-
-        <div class="results-grid">
-          <div class="result-tile">
-            <span>Total</span>
-            <strong>{{ resultados.total }}</strong>
-          </div>
-          <div class="result-tile">
-            <span>Correctas</span>
-            <strong>{{ resultados.correct }}</strong>
-          </div>
-          <div class="result-tile">
-            <span>Incorrectas</span>
-            <strong>{{ resultados.incorrect }}</strong>
-          </div>
-          <div class="result-tile">
-            <span>Aciertos</span>
-            <strong>{{ resultados.percentage }}%</strong>
-          </div>
-        </div>
-
-        <div class="results-actions">
-          <button type="button" class="k-btn k-btn--primary k-btn--block k-btn--lg" @click="volverUnidad">
-            Volver a la unidad
-          </button>
-          <button type="button" class="k-btn k-btn--ghost k-btn--block" @click="reintentarLeccion">
-            Intentar nuevamente
-          </button>
-        </div>
-      </div>
-    </main>
-
-    <main v-else class="k-container lesson lesson-error">
-      <div class="error-card">
-        <p class="k-eyebrow">Resultado no disponible</p>
-        <h1 class="k-h1">No pudimos cargar el resultado</h1>
-        <p class="k-muted">La lección no existe o aún no se completó la actividad.</p>
-        <RouterLink to="/courses" class="k-btn k-btn--primary k-btn--block k-btn--lg error-button">
-          Volver a cursos
-        </RouterLink>
-      </div>
+      </template>
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
+import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import {
-  obtenerActividadesPorLeccion,
   obtenerLeccion,
+  obtenerPreguntas,
   obtenerResultadosLeccion,
   obtenerUnidadPorId,
   reiniciarIntentoLeccion,
-  rutaUnidad,
+  rutaPregunta,
+  rutaResultados,
 } from '@/services/catalogo'
 
 const route = useRoute()
 const router = useRouter()
 
-const leccion = computed(() => obtenerLeccion(route.params.lessonId))
+const estado = ref('cargando')
+const mensajeError = ref('')
+const leccion = ref(null)
+const unidad = ref(null)
+const preguntas = ref([])
+const resultados = ref(null)
 
-const tituloLeccion = computed(() => {
-  if (!leccion.value) return ''
-  const unidad = obtenerUnidadPorId(leccion.value.unitId)
-  return unidad ? `${unidad.title}` : leccion.value.title
+const tituloLeccion = computed(() => unidad.value?.nombre ?? leccion.value?.titulo ?? '')
+
+const linkUnidad = computed(() => {
+  if (unidad.value) {
+    return { name: 'unidad', params: { courseId: unidad.value.cursoId, unitId: unidad.value.id } }
+  }
+  return { name: 'cursos' }
 })
 
-const resultados = computed(() => (leccion.value ? obtenerResultadosLeccion(leccion.value.id) : { total: 0, correct: 0, incorrect: 0, percentage: 0, passed: false, completed: false }))
+async function cargar() {
+  estado.value = 'cargando'
+  mensajeError.value = ''
+  const lessonId = route.params.lessonId
+  try {
+    if (!lessonId) {
+      estado.value = 'inexistente'
+      return
+    }
 
-const linkUnidad = computed(() =>
-  leccion.value ? rutaUnidad(leccion.value.unitId) : { name: 'cursos' },
-)
+    const dataLeccion = await obtenerLeccion(lessonId)
+    if (!dataLeccion) {
+      estado.value = 'inexistente'
+      return
+    }
+    leccion.value = dataLeccion
+
+    const dataUnidad = await obtenerUnidadPorId(dataLeccion.unidadId)
+    unidad.value = dataUnidad
+
+    const dataPreguntas = await obtenerPreguntas(lessonId)
+    preguntas.value = dataPreguntas
+
+    resultados.value = obtenerResultadosLeccion(lessonId)
+    estado.value = 'listo'
+  } catch (error) {
+    mensajeError.value = error.message
+    estado.value = 'error'
+  }
+}
+
+onMounted(cargar)
 
 function volverUnidad() {
-  if (!leccion.value) return router.push('/courses')
-  router.push(rutaUnidad(leccion.value.unitId))
+  if (unidad.value) {
+    router.push({
+      name: 'unidad',
+      params: { courseId: unidad.value.cursoId, unitId: unidad.value.id },
+    })
+    return
+  }
+  router.push('/courses')
 }
 
 function reintentarLeccion() {
   if (!leccion.value) return
   reiniciarIntentoLeccion(leccion.value.id)
-  const primeraActividad = obtenerActividadesPorLeccion(leccion.value.id)[0]
-  router.push({
-    name: 'actividad-leccion',
-    params: {
-      courseId: obtenerUnidadPorId(leccion.value.unitId)?.courseId,
-      unitId: String(leccion.value.unitId),
-      lessonId: leccion.value.id,
-      activityId: primeraActividad.id,
-    },
-  })
+  if (preguntas.value.length && unidad.value) {
+    router.push(rutaPregunta(leccion.value, unidad.value, preguntas.value[0].id))
+    return
+  }
+  if (unidad.value) {
+    router.push(rutaResultados(leccion.value, unidad.value))
+    return
+  }
+  router.push('/courses')
+}
+
+function verCursos() {
+  router.push('/courses')
 }
 </script>
 
@@ -188,33 +255,6 @@ function reintentarLeccion() {
 .results-actions {
   display: grid;
   gap: var(--k-space-3);
-  margin-top: var(--k-space-5);
-}
-
-.lesson-error {
-  display: grid;
-  place-items: center;
-}
-
-.error-card {
-  width: 100%;
-  max-width: 360px;
-  padding: 28px 22px;
-  border-radius: var(--k-radius);
-  border: 1px solid var(--k-line);
-  background: var(--k-surface-2);
-  text-align: center;
-}
-
-.error-card h1 {
-  margin-top: var(--k-space-3);
-}
-
-.error-card p {
-  margin-top: var(--k-space-3);
-}
-
-.error-button {
   margin-top: var(--k-space-5);
 }
 </style>

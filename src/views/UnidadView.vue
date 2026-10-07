@@ -1,87 +1,156 @@
 <template>
   <div class="k-screen">
-    <EncabezadoApp :titulo="`Unidad ${unidad?.id ?? ''}`" :back="linkCurso" />
+    <EncabezadoApp :titulo="`Unidad ${unidad?.orden ?? ''}`" :back="linkCurso" />
 
-    <main v-if="unidad" class="k-container unit">
-      <p class="k-eyebrow">Curso {{ curso?.name }}</p>
-      <h1 class="k-h1 unit-title">{{ unidad.title }}</h1>
-      <p class="k-muted unit-desc">{{ unidad.description }}</p>
+    <main class="k-container unit">
+      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
 
-      <div v-if="unidad.status === 'locked'" class="unit-locked-note">
-        <q-icon name="lock" size="18px" />
-        Completá la unidad anterior para desbloquear esta.
-      </div>
+      <EstadoPantalla
+        v-else-if="estado === 'error'"
+        tipo="error"
+        titulo="No pudimos cargar la unidad"
+        :mensaje="mensajeError"
+        accion-label="Reintentar"
+        @accion="cargar"
+      />
 
-      <section class="lessons">
-        <p class="k-eyebrow">Clases</p>
-        <div class="lessons-list">
-          <button
-            v-for="leccion in lecciones"
-            :key="leccion.id"
-            type="button"
-            class="lesson-row"
-            :class="[`is-${leccion.status}`]"
-            :disabled="leccion.status === 'locked'"
-            @click="abrirLeccion(leccion)"
-          >
-            <span class="lesson-icon">
-              <q-icon v-if="leccion.status === 'completed'" name="check" size="18px" />
-              <q-icon v-else-if="leccion.status === 'locked'" name="lock" size="15px" />
-              <q-icon v-else name="play_circle_filled" size="20px" />
-            </span>
-            <span class="lesson-body">
-              <span class="lesson-kind">{{ etiquetaTipo(leccion.kind) }}</span>
-              <span class="lesson-title">{{ leccion.title }}</span>
-              <span class="lesson-meta">{{ leccion.activityIds?.length }} actividades</span>
-            </span>
-            <q-icon name="chevron_right" size="18px" class="lesson-chev" />
-          </button>
+      <EstadoPantalla
+        v-else-if="estado === 'inexistente'"
+        tipo="inexistente"
+        titulo="Unidad no encontrada"
+        mensaje="La unidad que buscás no existe o ya no está disponible."
+        accion-label="Ver cursos"
+        @accion="verCursos"
+      />
+
+      <template v-else-if="estado === 'listo' && unidad">
+        <p class="k-eyebrow">Curso {{ curso?.nombre }}</p>
+        <h1 class="k-h1 unit-title">{{ unidad.nombre }}</h1>
+        <p class="k-muted unit-desc">{{ unidad.descripcion }}</p>
+
+        <div v-if="unidad.estado === 'bloqueada'" class="unit-locked-note">
+          <q-icon name="lock" size="18px" />
+          Completá la unidad anterior para desbloquear esta.
         </div>
-      </section>
 
-      <button
-        v-if="primeraDisponible"
-        type="button"
-        class="k-btn k-btn--primary k-btn--block unit-cta"
-        @click="abrirLeccion(primeraDisponible)"
-      >
-        <q-icon name="play_arrow" size="20px" />
-        Empezar primera clase
-      </button>
+        <section class="lessons">
+          <p class="k-eyebrow">Clases</p>
+
+          <EstadoPantalla
+            v-if="estadoLecciones === 'vacio'"
+            tipo="vacio"
+            titulo="Esta unidad aún no tiene clases"
+            mensaje="Las clases publicadas van a aparecer acá."
+          />
+
+          <div v-else class="lessons-list">
+            <button
+              v-for="leccion in lecciones"
+              :key="leccion.id"
+              type="button"
+              class="lesson-row"
+              :class="[`is-${leccion.estado}`]"
+              :disabled="leccion.estado === 'bloqueada'"
+              @click="abrirLeccion(leccion)"
+            >
+              <span class="lesson-icon">
+                <q-icon
+                  v-if="['completada', 'aprobada'].includes(leccion.estado)"
+                  name="check"
+                  size="18px"
+                />
+                <q-icon v-else-if="leccion.estado === 'bloqueada'" name="lock" size="15px" />
+                <q-icon v-else name="play_circle_filled" size="20px" />
+              </span>
+              <span class="lesson-body">
+                <span class="lesson-title">{{ leccion.titulo }}</span>
+                <span class="lesson-meta">{{ leccion.cantidadPreguntas }} preguntas</span>
+              </span>
+              <q-icon name="chevron_right" size="18px" class="lesson-chev" />
+            </button>
+          </div>
+        </section>
+
+        <button
+          v-if="primeraDisponible && unidad.estado !== 'bloqueada'"
+          type="button"
+          class="k-btn k-btn--primary k-btn--block unit-cta"
+          @click="abrirLeccion(primeraDisponible)"
+        >
+          <q-icon name="play_arrow" size="20px" />
+          Empezar primera clase
+        </button>
+      </template>
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
-import { obtenerCurso, obtenerLeccionesPorUnidad, obtenerUnidad, rutaLeccion } from '@/services/catalogo'
+import EstadoPantalla from '@/components/EstadoPantalla.vue'
+import { obtenerCurso, obtenerLecciones, obtenerUnidad } from '@/services/catalogo'
 
 const route = useRoute()
 const router = useRouter()
 
-const courseId = computed(() => route.params.courseId)
-const unitId = computed(() => route.params.unitId)
+const estado = ref('cargando')
+const estadoLecciones = ref('cargando')
+const mensajeError = ref('')
+const unidad = ref(null)
+const curso = ref(null)
+const lecciones = ref([])
 
-const unidad = computed(() => obtenerUnidad(courseId.value, unitId.value))
+const linkCurso = computed(() => ({
+  name: 'curso',
+  params: { courseId: route.params.courseId },
+}))
 
-const curso = computed(() => obtenerCurso(courseId.value))
-
-const lecciones = computed(() => (unidad.value ? obtenerLeccionesPorUnidad(unidad.value.id) : []))
-
-const primeraDisponible = computed(() =>
-  unidad.value ? lecciones.value.find((l) => l.status === 'available') : null,
+const primeraDisponible = computed(
+  () => lecciones.value.find((l) => l.estado !== 'bloqueada') ?? null,
 )
 
-const linkCurso = computed(() => ({ name: 'curso', params: { courseId: courseId.value } }))
+async function cargar() {
+  estado.value = 'cargando'
+  estadoLecciones.value = 'cargando'
+  mensajeError.value = ''
+  try {
+    const dataUnidad = await obtenerUnidad(route.params.courseId, route.params.unitId)
+    if (!dataUnidad) {
+      estado.value = 'inexistente'
+      return
+    }
+    unidad.value = dataUnidad
 
-function etiquetaTipo(kind) {
-  return kind === 'challenge' ? 'Desafío' : 'Clase'
+    const dataCurso = await obtenerCurso(route.params.courseId)
+    curso.value = dataCurso
+
+    const dataLecciones = await obtenerLecciones(dataUnidad.id)
+    lecciones.value = dataLecciones
+    estadoLecciones.value = dataLecciones.length ? 'listo' : 'vacio'
+    estado.value = 'listo'
+  } catch (error) {
+    mensajeError.value = error.message
+    estado.value = 'error'
+  }
 }
 
+onMounted(cargar)
+
 function abrirLeccion(leccion) {
-  router.push(rutaLeccion(leccion.id))
+  router.push({
+    name: 'leccion',
+    params: {
+      courseId: route.params.courseId,
+      unitId: route.params.unitId,
+      lessonId: leccion.id,
+    },
+  })
+}
+
+function verCursos() {
+  router.push('/courses')
 }
 </script>
 
@@ -148,11 +217,12 @@ function abrirLeccion(leccion) {
   transform: none;
 }
 
-.lesson-row.is-completed {
+.lesson-row.is-completada,
+.lesson-row.is-aprobada {
   border-color: rgba(52, 211, 153, 0.35);
 }
 
-.lesson-row.is-available {
+.lesson-row.is-disponible {
   border-color: rgba(142, 5, 194, 0.55);
 }
 
@@ -169,11 +239,12 @@ function abrirLeccion(leccion) {
   color: var(--k-accent);
 }
 
-.lesson-row.is-completed .lesson-icon {
+.lesson-row.is-completada .lesson-icon,
+.lesson-row.is-aprobada .lesson-icon {
   color: var(--k-success);
 }
 
-.lesson-row.is-locked .lesson-icon {
+.lesson-row.is-bloqueada .lesson-icon {
   color: var(--k-text-3);
 }
 
@@ -182,14 +253,6 @@ function abrirLeccion(leccion) {
   min-width: 0;
   display: grid;
   gap: 2px;
-}
-
-.lesson-kind {
-  font-size: 10.5px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--k-text-3);
 }
 
 .lesson-title {

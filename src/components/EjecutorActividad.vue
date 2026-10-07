@@ -1,81 +1,28 @@
 <template>
   <div class="activity-runner">
-    <h2 class="activity-statement">{{ actividadActual.statement }}</h2>
+    <h2 class="activity-statement">{{ pregunta.enunciado }}</h2>
 
-    <BloqueCodigo v-if="actividadActual.code" :code="actividadActual.code" class="activity-code" />
-
-    <div v-if="isChoice" class="options">
+    <div v-if="opciones.length" class="options">
       <button
-        v-for="(option, index) in actividadActual.options"
-        :key="index"
+        v-for="(opcion, index) in opciones"
+        :key="opcion.id"
         type="button"
         class="option"
-        :class="optionClasses(index)"
-        :disabled="submitted"
-        @click="pick(index)"
+        :class="optionClasses(opcion)"
+        :disabled="bloqueado"
+        @click="seleccionar(opcion)"
       >
         <span class="option-letter k-mono">{{ letters[index] }}</span>
-        <code class="option-text k-mono">{{ option }}</code>
+        <code class="option-text k-mono">{{ opcion.texto }}</code>
       </button>
     </div>
 
-    <div v-else-if="isOrder" class="order">
-      <p class="order-label">Tocá las líneas en el orden correcto:</p>
-      <div class="order-pool">
-        <button
-          v-for="item in pool"
-          :key="item.index"
-          type="button"
-          class="line-chip"
-          :disabled="submitted"
-          @click="chooseLine(item)"
-        >
-          {{ item.line }}
-        </button>
-      </div>
-      <div class="order-stack">
-        <button
-          v-for="(item, index) in chosen"
-          :key="item.index"
-          type="button"
-          class="line-chip is-chosen"
-          :disabled="submitted"
-          @click="unchoose(item)"
-        >
-          <span class="order-number k-mono">{{ index + 1 }}</span>
-          {{ item.line }}
-        </button>
-        <p v-if="!chosen.length" class="order-empty">Las líneas elegidas van a aparecer acá.</p>
-      </div>
-    </div>
-
-    <div v-else class="answer-field">
-      <input
-        v-if="activity.type === 'fill'"
-        v-model="typed"
-        type="text"
-        class="text-input k-mono"
-        :placeholder="placeholder"
-        :disabled="submitted"
-        @keyup.enter="handleAction"
-      />
-      <textarea
-        v-else
-        v-model="typed"
-        class="text-input k-mono"
-        rows="3"
-        :placeholder="placeholder"
-        :disabled="submitted"
-      ></textarea>
-      <p class="answer-hint">{{ hint }}</p>
-    </div>
-
     <transition name="fade">
-      <div v-if="submitted" class="feedback" :class="feedbackClass">
-        <q-icon :name="correct ? 'check_circle' : 'cancel'" size="20px" />
+      <div v-if="devolucion" class="feedback" :class="feedbackClass">
+        <q-icon :name="feedbackIcona" size="20px" />
         <div class="feedback-body">
-          <strong>{{ correct ? 'Correcto' : 'Incorrecto' }}</strong>
-          <p>{{ correct ? actividadActual.explanation : wrongMessage }}</p>
+          <strong>{{ feedbackTitulo }}</strong>
+          <p>{{ feedbackMensaje }}</p>
         </div>
       </div>
     </transition>
@@ -83,9 +30,15 @@
     <button
       type="button"
       class="k-btn k-btn--primary k-btn--block action-main"
-      :disabled="!canCheck"
-      @click="handleAction"
+      :disabled="!puedeAccionar"
+      @click="accionPrincipal"
     >
+      <q-spinner v-if="corrigiendo" size="19px" class="on-left" color="white" />
+      <q-icon
+        v-else
+        :name="actionLabel === 'Siguiente' ? 'chevron_right' : 'play_arrow'"
+        size="19px"
+      />
       {{ actionLabel }}
     </button>
   </div>
@@ -93,151 +46,124 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import BloqueCodigo from './BloqueCodigo.vue'
 
 const props = defineProps({
-  activity: {
+  pregunta: {
     type: Object,
     required: false,
     default: null,
   },
-  actividad: {
+  corrigiendo: {
+    type: Boolean,
+    default: false,
+  },
+  devolucion: {
     type: Object,
-    required: false,
     default: null,
   },
 })
 
-const emit = defineEmits(['submit', 'next'])
-
-const actividadActual = computed(() => props.actividad || props.activity || {})
+const emit = defineEmits(['comprobar', 'siguiente'])
 
 const letters = ['A', 'B', 'C', 'D', 'E', 'F']
 
-const selected = ref(-1)
-const typed = ref('')
-const submitted = ref(false)
-const correct = ref(false)
-const pool = ref([])
-const chosen = ref([])
+const seleccionId = ref(null)
 
-const isChoice = computed(() => ['choice', 'fix'].includes(actividadActual.value.type))
-const isOrder = computed(() => actividadActual.value.type === 'order')
-const isText = computed(() => actividadActual.value.type === 'fill' || actividadActual.value.type === 'write')
+const opciones = computed(() => props.pregunta?.opciones ?? [])
 
-const hint = computed(() => {
-  if (actividadActual.value.type === 'write') return 'Escribí tu código y tocá Comprobar.'
-  return 'Escribí lo que falta y tocá Comprobar.'
-})
+const haySeleccion = computed(() => seleccionId.value !== null)
 
-const placeholder = computed(() =>
-  actividadActual.value.type === 'write' ? 'let miVariable = …;' : 'Escribí el fragmento que falta…',
-)
+const respuestaLockeada = computed(() => Boolean(props.devolucion))
 
-const wrongMessage = computed(() => {
-  if (actividadActual.value.explanation) {
-    return actividadActual.value.explanation
-  }
-  if (isOrder.value)
-    return 'Algunas líneas no están en el orden correcto. Revisá e intentalo de nuevo.'
-  return 'Revisá tu respuesta e intentalo de nuevo.'
-})
+const bloqueado = computed(() => props.corrigiendo || respuestaLockeada.value)
 
-const canCheck = computed(() => {
-  if (!submitted.value) {
-    if (isText.value) return typed.value.trim().length > 0
-    if (isOrder.value) return chosen.value.length === (actividadActual.value.lines?.length || 0)
-    return selected.value !== -1
-  }
-  return true
+const puedeAccionar = computed(() => {
+  if (props.corrigiendo) return false
+  if (respuestaLockeada.value) return true
+  return haySeleccion.value
 })
 
 const actionLabel = computed(() => {
-  if (!submitted.value) return 'Confirmar'
-  return 'Continuar'
+  if (props.corrigiendo) return 'Comprobando…'
+  if (respuestaLockeada.value && props.devolucion?.estado === 'error') return 'Reintentar'
+  if (respuestaLockeada.value) return 'Siguiente'
+  return 'Comprobar'
 })
 
-const feedbackClass = computed(() =>
-  submitted.value ? (correct.value ? 'is-correct' : 'is-wrong') : '',
-)
+// Distinguimos la devolución: cualquier respuesta ya vuelve evaluada del server.
+// Las incorrectas muestran "Incorrecta"; el estado 'error' significa que no se
+// pudo comprobar la respuesta y se ofrece reintentar.
+const feedbackClass = computed(() => {
+  if (!props.devolucion) return ''
+  if (props.devolucion.estado === 'correcta') return 'is-correct'
+  if (props.devolucion.estado === 'error') return 'is-neutral'
+  return 'is-wrong'
+})
 
-function initOrder() {
-  const lines = actividadActual.value.lines || []
-  const shuffled = lines
-    .map((line, index) => ({ line, index }))
-    .sort(() => Math.random() - 0.5)
-  pool.value = shuffled
-  chosen.value = []
+const feedbackIcona = computed(() => {
+  if (props.devolucion?.estado === 'correcta') return 'check_circle'
+  if (props.devolucion?.estado === 'error') return 'error_outline'
+  return 'cancel'
+})
+
+const feedbackTitulo = computed(() => {
+  if (props.devolucion?.estado === 'correcta') return 'Correcto'
+  if (props.devolucion?.estado === 'error') return 'No se pudo comprobar'
+  return 'Incorrecto'
+})
+
+const feedbackMensaje = computed(() => {
+  if (props.devolucion?.estado === 'error') {
+    return (
+      props.devolucion.mensaje ||
+      'Hubo un problema al comprobar tu respuesta. Reintentá o revisá tu conexión.'
+    )
+  }
+  return props.devolucion?.explicacion || ''
+})
+
+function seleccionar(opcion) {
+  if (bloqueado.value) return
+  seleccionId.value = opcion.id
 }
 
-function reset() {
-  selected.value = -1
-  typed.value = ''
-  submitted.value = false
-  correct.value = false
-  if (isOrder.value) initOrder()
+function optionClasses(opcion) {
+  const clases = { 'is-selected': seleccionId.value === opcion.id }
+  if (!props.devolucion) return clases
+  if (props.devolucion.estado === 'error') return clases
+  return {
+    ...clases,
+    'is-correct': seleccionId.value === opcion.id && props.devolucion.estado === 'correcta',
+    'is-wrong': seleccionId.value === opcion.id && props.devolucion.estado === 'incorrecta',
+  }
+}
+
+function accionPrincipal() {
+  if (props.corrigiendo) return
+  if (
+    respuestaLockeada.value &&
+    props.devolucion?.estado === 'error' &&
+    seleccionId.value !== null
+  ) {
+    emit('comprobar', seleccionId.value)
+    return
+  }
+  if (respuestaLockeada.value) {
+    emit('siguiente')
+    return
+  }
+  if (seleccionId.value !== null) {
+    emit('comprobar', seleccionId.value)
+  }
 }
 
 watch(
-  () => actividadActual.value?.id,
-  () => reset(),
+  () => props.pregunta?.id,
+  () => {
+    seleccionId.value = null
+  },
   { immediate: true },
 )
-
-function pick(index) {
-  selected.value = index
-}
-
-function chooseLine(item) {
-  chosen.value.push(item)
-  pool.value = pool.value.filter((p) => p !== item)
-}
-
-function unchoose(item) {
-  chosen.value = chosen.value.filter((c) => c !== item)
-  pool.value.push(item)
-}
-
-function normalize(value) {
-  return String(value || '')
-    .replace(/\s+/g, '')
-    .toLowerCase()
-    .replace(/^['"]|['"]$/g, '')
-    .replace(/;+$/, '')
-}
-
-function isAnswerCorrect() {
-  if (isOrder.value) {
-    return (
-      chosen.value.length === (actividadActual.value.lines?.length || 0) &&
-      chosen.value.every((item, index) => item.index === index)
-    )
-  }
-  if (isText.value) {
-    return (actividadActual.value.expected || []).some((answer) => normalize(typed.value) === normalize(answer))
-  }
-  return selected.value === actividadActual.value.answer
-}
-
-function optionClasses(index) {
-  if (!submitted.value) {
-    return { 'is-selected': selected.value === index }
-  }
-  const isAnswer = index === actividadActual.value.answer
-  const isWrongChoice = selected.value === index && !isAnswer
-  return { 'is-answer': isAnswer, 'is-wrong-choice': isWrongChoice }
-}
-
-function handleAction() {
-  if (!submitted.value) {
-    submitted.value = true
-    correct.value = isAnswerCorrect()
-    emit('submit', correct.value)
-    return
-  }
-
-  emit('next')
-}
 </script>
 
 <style scoped>
@@ -250,10 +176,7 @@ function handleAction() {
   font-size: 18px;
   font-weight: 700;
   line-height: 1.45;
-}
-
-.activity-code {
-  margin-top: var(--k-space-1);
+  white-space: pre-wrap;
 }
 
 .options {
@@ -279,6 +202,10 @@ function handleAction() {
     background 0.12s ease,
     transform 0.08s ease;
   -webkit-tap-highlight-color: transparent;
+}
+
+.option:disabled {
+  cursor: default;
 }
 
 .option-letter {
@@ -313,120 +240,24 @@ function handleAction() {
   color: var(--k-accent);
 }
 
-.option.is-answer {
+.option.is-correct {
   border-color: var(--k-success);
   background: rgba(52, 211, 153, 0.12);
 }
 
-.option.is-answer .option-letter {
+.option.is-correct .option-letter {
   border-color: var(--k-success);
   color: var(--k-success);
 }
 
-.option.is-wrong-choice {
+.option.is-wrong {
   border-color: var(--k-error);
   background: rgba(255, 93, 115, 0.1);
 }
 
-.option.is-wrong-choice .option-letter {
+.option.is-wrong .option-letter {
   border-color: var(--k-error);
   color: var(--k-error);
-}
-
-.order {
-  margin-top: var(--k-space-5);
-  display: grid;
-  gap: var(--k-space-4);
-}
-
-.order-label {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--k-text-2);
-}
-
-.order-pool {
-  display: grid;
-  gap: var(--k-space-3);
-}
-
-.order-stack {
-  display: grid;
-  gap: var(--k-space-3);
-  min-height: 56px;
-  padding: 14px;
-  border-radius: var(--k-radius-sm);
-  border: 2px dashed var(--k-line);
-}
-
-.line-chip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1.5px solid var(--k-line);
-  background: rgba(17, 10, 22, 0.95);
-  color: #d9c8ef;
-  font-family: var(--k-font-code);
-  font-size: 12.5px;
-  text-align: left;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.line-chip.is-chosen {
-  border-color: var(--k-accent);
-  background: var(--k-accent-soft);
-}
-
-.order-number {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: 7px;
-  background: var(--k-accent);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.order-empty {
-  align-self: center;
-  text-align: center;
-  font-size: 12.5px;
-  color: var(--k-text-3);
-}
-
-.answer-field {
-  margin-top: var(--k-space-5);
-}
-
-.text-input {
-  width: 100%;
-  padding: 14px 16px;
-  border-radius: var(--k-radius-sm);
-  border: 2px solid var(--k-line);
-  background: var(--k-surface);
-  color: var(--k-text);
-  font-size: 14px;
-  line-height: 1.5;
-  outline: none;
-  resize: vertical;
-  transition: border-color 0.12s ease;
-}
-
-.text-input:focus {
-  border-color: var(--k-accent);
-}
-
-.answer-hint {
-  margin-top: var(--k-space-2);
-  font-size: 12px;
-  color: var(--k-text-3);
 }
 
 .feedback {
@@ -449,12 +280,21 @@ function handleAction() {
   background: rgba(255, 93, 115, 0.1);
 }
 
+.feedback.is-neutral {
+  border-color: rgba(250, 204, 21, 0.4);
+  background: rgba(250, 204, 21, 0.08);
+}
+
 .feedback.is-correct .q-icon {
   color: var(--k-success);
 }
 
 .feedback.is-wrong .q-icon {
   color: var(--k-error);
+}
+
+.feedback.is-neutral .q-icon {
+  color: #facc14;
 }
 
 .feedback-body strong {
@@ -471,6 +311,10 @@ function handleAction() {
 
 .action-main {
   margin-top: var(--k-space-6);
+}
+
+.action-main .on-left {
+  margin-right: 8px;
 }
 
 .fade-enter-active,

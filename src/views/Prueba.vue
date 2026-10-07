@@ -1,79 +1,98 @@
 <template>
-    <q-layout view="hhh lpr fff">
-        <q-header>
-            <q-toolbar class="barra de navegación">
-                <q-toolbar class="marca">
-                    KodiGo
-                </q-toolbar>
-            </q-toolbar>
-        </q-header>
-        <q-page-container>
-            <nav>
-                <q-btn flat no-caps label="Inicio" to="/"></q-btn>
-            </nav>
-        </q-page-container>
-    </q-layout>
-    <main>
-        <h1>Crear cuenta</h1>
-        <p>Registrate para acceder</p>
-        <form @submit.prevent="registrarUsuario">
-            <label>Correo electrónico<input v-model="correo" type="email" placeholder="tucorreo@gmail.com" autocomplete="email" required></label>
-            <label>Contraseña<input v-model="password" type="password" placeholder="Ingresa tu contraseña" autocomplete="new-password" required></label>
-            <label>Repetir contraseña<input v-model="repetirPassword" type="password" placeholder="Repeti la contraseña" autocomplete="new-password" required></label>
-            <q-btn type="submit" :disabled="cargando">{{cargando ? 'Registrando...' : 'Registrarme'}}</q-btn>
-        </form>
-    </main>
-    <p v-if="mensaje" :class="{ 'rojo': !registroExitoso, 'verde': registroExitoso }">{{ mensaje }}</p>
+  <q-layout view="hhh lpr fff">
+    <q-header>
+      <q-toolbar class="barra de navegación">
+        <q-toolbar class="marca"> KodiGo </q-toolbar>
+      </q-toolbar>
+    </q-header>
+    <q-page-container>
+      <nav>
+        <q-btn flat no-caps label="Inicio" to="/"></q-btn>
+      </nav>
+    </q-page-container>
+  </q-layout>
+  <main>
+    <h1>Crear cuenta</h1>
+    <p>Registrate para acceder</p>
+    <form @submit.prevent="registrarUsuario">
+      <label
+        >Correo electrónico<input
+          v-model="correo"
+          type="email"
+          placeholder="tucorreo@gmail.com"
+          autocomplete="email"
+          required
+      /></label>
+      <label
+        >Contraseña<input
+          v-model="password"
+          type="password"
+          placeholder="Ingresa tu contraseña"
+          autocomplete="new-password"
+          required
+      /></label>
+      <label
+        >Repetir contraseña<input
+          v-model="repetirPassword"
+          type="password"
+          placeholder="Repeti la contraseña"
+          autocomplete="new-password"
+          required
+      /></label>
+      <q-btn type="submit" :disabled="cargando">{{
+        cargando ? 'Registrando...' : 'Registrarme'
+      }}</q-btn>
+    </form>
+  </main>
+  <p v-if="mensaje" :class="{ rojo: !registroExitoso, verde: registroExitoso }">{{ mensaje }}</p>
 </template>
 
 <script setup>
-    import { ref } from 'vue'
-    import {supabase} from '@/supabase'
-    
-    const correo=ref('')
-    const password=ref('')
-    const repetirPassword=ref('')
-    const cargando=ref(false)
-    const mensaje=ref('')
-    const registroExitoso=ref(false)
+import { ref } from 'vue'
+import { supabase } from '@/supabase'
 
-    async function registrarUsuario() {
-        mensaje.value = ''
-        registroExitoso.value = false
-        if (password.value !== repetirPassword.value) {
-            mensaje.value = 'Las contraseñas no coinciden'
-            return
-        }
-        if (password.value.length < 6) {
-            mensaje.value = 'La contraseña debe tener al menos 6 caracteres'
-            return
-        }
+const correo = ref('')
+const password = ref('')
+const repetirPassword = ref('')
+const cargando = ref(false)
+const mensaje = ref('')
+const registroExitoso = ref(false)
 
-        try{
-            cargando.value = true
-            const { error } = await supabase.auth.signUp({
-                email: correo.value,
-                password: password.value,
-            })
-            cargando.value = false
-            if (error) {
-                throw error
-            } else {
-                registroExitoso.value = true
-                mensaje.value = 'Registro realizado. Revisa tu Email.'
+async function registrarUsuario() {
+  mensaje.value = ''
+  registroExitoso.value = false
+  if (password.value !== repetirPassword.value) {
+    mensaje.value = 'Las contraseñas no coinciden'
+    return
+  }
+  if (password.value.length < 6) {
+    mensaje.value = 'La contraseña debe tener al menos 6 caracteres'
+    return
+  }
 
-                correo.value = ''
-                password.value = ''
-                repetirPassword.value = ''
-            }
-        } catch (error) {
-            mensaje.value=error.message
-        } finally {
-            cargando.value = false
-        }
+  try {
+    cargando.value = true
+    const { error } = await supabase.auth.signUp({
+      email: correo.value,
+      password: password.value,
+    })
+    cargando.value = false
+    if (error) {
+      throw error
+    } else {
+      registroExitoso.value = true
+      mensaje.value = 'Registro realizado. Revisa tu Email.'
+
+      correo.value = ''
+      password.value = ''
+      repetirPassword.value = ''
     }
+  } catch (error) {
+    mensaje.value = error.message
+  } finally {
+    cargando.value = false
+  }
+}
 </script>
 
-<style scoped>
-
-</style>
+<style scoped></style>

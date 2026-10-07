@@ -3,73 +3,135 @@
     <EncabezadoApp marca />
 
     <main class="k-container home">
-      <section class="hero">
-        <FantasmaKodigo :size="112" variant="happy" class="hero-ghost" />
-        <p class="hero-wordmark k-font-brand">Kodigo</p>
-        <p class="hero-tagline">Aprendé a programar paso a paso.</p>
-        <div class="hero-stats">
-          <span class="hero-stat">
-            <q-icon name="bolt" size="16px" />
-            120 XP
-          </span>
-          <span class="hero-stat">
-            <q-icon name="local_fire_department" size="16px" />
-            Racha 3
-          </span>
+      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
+
+      <EstadoPantalla
+        v-else-if="estado === 'error'"
+        tipo="error"
+        titulo="No pudimos cargar Kodigo"
+        :mensaje="mensajeError"
+        accion-label="Reintentar"
+        @accion="cargar"
+      />
+
+      <template v-else>
+        <section class="hero">
+          <FantasmaKodigo :size="112" variant="happy" class="hero-ghost" />
+          <p class="hero-wordmark k-font-brand">Kodigo</p>
+          <p class="hero-tagline">Aprendé a programar paso a paso.</p>
+          <div class="hero-stats">
+            <span class="hero-stat">
+              <q-icon name="bolt" size="16px" />
+              120 XP
+            </span>
+            <span class="hero-stat">
+              <q-icon name="local_fire_department" size="16px" />
+              Racha 3
+            </span>
+          </div>
+        </section>
+
+        <BurbujaFantasma
+          :mensaje="mensajeBienvenida"
+          :tamano-fantasma="60"
+          estado="happy"
+          class="home-bubble"
+        />
+
+        <div class="home-actions">
+          <button
+            type="button"
+            class="k-btn k-btn--primary k-btn--block k-btn--lg"
+            @click="continuarAprendiendo"
+          >
+            {{ etiquetaContinuar }}
+          </button>
+          <RouterLink to="/courses" class="k-btn k-btn--ghost k-btn--block">
+            Ver todos los cursos
+          </RouterLink>
         </div>
-      </section>
 
-      <BurbujaFantasma :mensaje="mensajeBienvenida" :tamano-fantasma="60" estado="happy" class="home-bubble" />
-
-      <div class="home-actions">
-        <button
-          type="button"
-          class="k-btn k-btn--primary k-btn--block k-btn--lg"
-          :disabled="!siguienteLeccion"
-          @click="continuarAprendiendo"
-        >
-          {{ siguienteLeccion ? 'Continuar aprendiendo' : 'Empezar a aprender' }}
-        </button>
-        <RouterLink to="/courses" class="k-btn k-btn--ghost k-btn--block"
-          >Ver todos los cursos</RouterLink
-        >
-      </div>
-
-      <TarjetaCurso v-if="cursoJavaScript" :curso="cursoJavaScript" @select="abrirCurso" />
+        <TarjetaCurso v-if="cursoDestacado" :curso="cursoDestacado" @select="abrirCurso" />
+      </template>
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
 import BurbujaFantasma from '@/components/BurbujaFantasma.vue'
+import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import FantasmaKodigo from '@/components/FantasmaKodigo.vue'
 import TarjetaCurso from '@/components/TarjetaCurso.vue'
-import { obtenerCurso, obtenerPrimeraLeccionDisponible, rutaLeccion } from '@/services/catalogo'
+import { obtenerCursos, obtenerLecciones, obtenerUnidades, rutaLeccion } from '@/services/catalogo'
 
 const router = useRouter()
 
-const js = 'javascript'
+const estado = ref('cargando')
+const mensajeError = ref('')
+const cursos = ref([])
+const primeraUnidad = ref(null)
+const primeraLeccion = ref(null)
 
 const mensajeBienvenida =
   '¡Hola! Soy el fantasma de Kodigo. ¿Listo para escribir tu primer código en JavaScript?'
 
-const cursoJavaScript = computed(() => obtenerCurso(js))
+const cursoDestacado = computed(() => cursos.value[0] || null)
 
-const siguienteLeccion = computed(() => obtenerPrimeraLeccionDisponible(js))
+const etiquetaContinuar = computed(() => {
+  if (!primeraLeccion.value) return 'Empezar a aprender'
+  const tieneProgreso =
+    primeraUnidad.value?.progreso > 0 ||
+    ['completada', 'aprobada'].includes(primeraLeccion.value.estado)
+  return tieneProgreso ? 'Continuar aprendiendo' : 'Empezar a aprender'
+})
+
+async function cargar() {
+  estado.value = 'cargando'
+  mensajeError.value = ''
+  try {
+    const lista = await obtenerCursos()
+    cursos.value = lista
+    primeraUnidad.value = null
+    primeraLeccion.value = null
+
+    const curso = lista[0]
+    if (curso) {
+      const unidades = await obtenerUnidades(curso.id)
+      const unidad = unidades.find((u) => u.estado !== 'bloqueada')
+      primeraUnidad.value = unidad || null
+      if (unidad) {
+        const lecciones = await obtenerLecciones(unidad.id)
+        primeraLeccion.value = lecciones.find((l) => l.estado !== 'bloqueada') || null
+      }
+    }
+    estado.value = 'listo'
+  } catch (error) {
+    mensajeError.value = error.message
+    estado.value = 'error'
+  }
+}
+
+onMounted(cargar)
 
 function continuarAprendiendo() {
-  if (!siguienteLeccion.value) {
-    router.push('/courses')
+  if (primeraLeccion.value && primeraUnidad.value) {
+    router.push(rutaLeccion(primeraLeccion.value, primeraUnidad.value))
     return
   }
-  router.push(rutaLeccion(siguienteLeccion.value.id))
+  if (cursoDestacado.value) {
+    router.push({ name: 'curso', params: { courseId: cursoDestacado.value.id } })
+    return
+  }
+  router.push('/courses')
 }
 
 function abrirCurso() {
-  router.push({ name: 'curso', params: { courseId: js } })
+  if (cursoDestacado.value) {
+    router.push({ name: 'curso', params: { courseId: cursoDestacado.value.id } })
+  }
 }
 </script>
 

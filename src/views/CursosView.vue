@@ -9,28 +9,59 @@
         Empezá por JavaScript: tu primera experiencia de programación.
       </p>
 
-      <div class="course-list">
-        <TarjetaCurso
-          v-for="curso in cursos"
-          :key="curso.id"
-          :curso="curso"
-          @select="abrirCurso"
-        />
+      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
+
+      <EstadoPantalla
+        v-else-if="estado === 'error'"
+        tipo="error"
+        titulo="No pudimos cargar los cursos"
+        :mensaje="mensajeError"
+        accion-label="Reintentar"
+        @accion="cargar"
+      />
+
+      <EstadoPantalla
+        v-else-if="estado === 'vacio'"
+        tipo="vacio"
+        titulo="Todavía no hay cursos"
+        mensaje="Cuando haya cursos publicados los vas a ver acá."
+      />
+
+      <div v-else class="course-list">
+        <TarjetaCurso v-for="curso in cursos" :key="curso.id" :curso="curso" @select="abrirCurso" />
       </div>
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
+import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import TarjetaCurso from '@/components/TarjetaCurso.vue'
 import { obtenerCursos } from '@/services/catalogo'
 
 const router = useRouter()
 
-const cursos = computed(() => obtenerCursos())
+const estado = ref('cargando')
+const cursos = ref([])
+const mensajeError = ref('')
+
+async function cargar() {
+  estado.value = 'cargando'
+  mensajeError.value = ''
+  try {
+    const data = await obtenerCursos()
+    cursos.value = data
+    estado.value = data.length ? 'listo' : 'vacio'
+  } catch (error) {
+    mensajeError.value = error.message
+    estado.value = 'error'
+  }
+}
+
+onMounted(cargar)
 
 function abrirCurso(courseId) {
   router.push({ name: 'curso', params: { courseId } })

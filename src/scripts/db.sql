@@ -4,6 +4,10 @@ create table cursos (
     id uuid primary key default gen_random_uuid(),
     nombre varchar(100) not null,
     descripcion text,
+    lema varchar(160),
+    monograma varchar(10),
+    logo varchar(60),
+    color_acento varchar(20) default '#8e05c2',
     imagen_url text,
     orden integer not null default 0,
     estado_publicacion varchar(20) not null default 'borrador',
@@ -253,8 +257,12 @@ begin
 end;
 $$;
 
+-- La funcion se otorga tambien a anon porque la etapa actual no requiere
+-- autenticacion: el visitante comprueba respuestas en modo practica. La funcion
+-- valida internamente que la pregunta exista y este publicada, y que la opcion
+-- pertenezca a la pregunta, sin exponer la solucion.
 revoke all on function comprobar_respuesta(uuid, uuid) from public;
-grant execute on function comprobar_respuesta(uuid, uuid) to authenticated;
+grant execute on function comprobar_respuesta(uuid, uuid) to anon, authenticated;
 
 alter table cursos enable row level security;
 alter table unidades enable row level security;
@@ -276,17 +284,21 @@ for select
 to anon, authenticated
 using (estado_publicacion = 'publicado');
 
-create policy "unidades publicadas visibles"
+-- Las unidades y lecciones marcadas como 'bloqueada' tambien son visibles para
+-- que la aplicacion pueda mostrarlas con su estado de bloqueo en el recorrido.
+-- El contenido educativo (preguntas, opciones y soluciones) permanece restringido
+-- a lo publicado, por lo que una unidad bloqueada no filtra preguntas.
+create policy "unidades publicadas o bloqueadas visibles"
 on unidades
 for select
 to anon, authenticated
-using (estado_publicacion = 'publicado');
+using (estado_publicacion in ('publicado', 'bloqueada'));
 
-create policy "lecciones publicadas visibles"
+create policy "lecciones publicadas o bloqueadas visibles"
 on lecciones
 for select
 to anon, authenticated
-using (estado_publicacion = 'publicado');
+using (estado_publicacion in ('publicado', 'bloqueada'));
 
 create policy "preguntas publicadas visibles"
 on preguntas

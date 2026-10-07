@@ -62,7 +62,9 @@ const activo = computed(() => {
   border-radius: 14px;
   color: rgba(255, 255, 255, 0.72);
   text-decoration: none;
-  transition: color 0.15s ease, background 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
   -webkit-tap-highlight-color: transparent;
 }
 

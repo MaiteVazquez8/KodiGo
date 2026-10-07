@@ -1,39 +1,39 @@
 <template>
   <article
     class="unit-card"
-    :class="[`is-${unit.status}`, { 'is-clickable': unit.status !== 'locked' }]"
-    :role="unit.status === 'locked' ? undefined : 'button'"
-    :tabindex="unit.status === 'locked' ? -1 : 0"
-    aria-label="Abrir unidad {{ unit.title }}"
+    :class="[`is-${unit.estado}`, { 'is-clickable': unit.estado !== 'bloqueada' }]"
+    :role="unit.estado === 'bloqueada' ? undefined : 'button'"
+    :tabindex="unit.estado === 'bloqueada' ? -1 : 0"
+    aria-label="Abrir unidad {{ unit.nombre }}"
     @click="onSelect"
     @keyup.enter="onSelect"
   >
     <div class="unit-card-top">
-      <span class="unit-tag">Unidad {{ unit.id }}</span>
-      <span class="unit-state" :class="`state-${unit.status}`">{{ stateLabel }}</span>
+      <span class="unit-tag">Unidad {{ unit.orden }}</span>
+      <span class="unit-state" :class="`state-${unit.estado}`">{{ stateLabel }}</span>
     </div>
 
-    <h2 class="unit-card-title">{{ unit.title }}</h2>
-    <p class="unit-card-desc">{{ unit.description }}</p>
+    <h2 class="unit-card-title">{{ unit.nombre }}</h2>
+    <p class="unit-card-desc">{{ unit.descripcion }}</p>
 
-    <div v-if="unit.status !== 'locked'" class="unit-card-progress">
+    <div v-if="unit.estado !== 'bloqueada'" class="unit-card-progress">
       <div class="k-progress">
-        <i :style="{ width: unit.progress + '%' }"></i>
+        <i :style="{ width: unit.progreso + '%' }"></i>
       </div>
       <div class="unit-card-meta">
         <span>{{ lessons }} lecciones</span>
-        <span>{{ unit.progress }}%</span>
+        <span>{{ unit.progreso }}%</span>
       </div>
     </div>
 
     <div class="unit-card-action">
-      <template v-if="unit.status === 'locked'">
+      <template v-if="unit.estado === 'bloqueada'">
         <q-icon name="lock" size="15px" />
         <span>Bloqueada</span>
       </template>
       <template v-else>
-        <q-icon :name="unit.status === 'completed' ? 'replay' : 'play_arrow'" size="18px" />
-        <span>{{ unit.status === 'completed' ? 'Repasar' : 'Continuar' }}</span>
+        <q-icon :name="unit.estado === 'completada' ? 'replay' : 'play_arrow'" size="18px" />
+        <span>{{ unit.estado === 'completada' ? 'Repasar' : 'Continuar' }}</span>
       </template>
     </div>
   </article>
@@ -56,12 +56,12 @@ const props = defineProps({
 const emit = defineEmits(['select'])
 
 const stateLabel = computed(() => {
-  const labels = { available: 'Disponible', locked: 'Bloqueada', completed: 'Completada' }
-  return labels[props.unit.status] || 'Disponible'
+  const labels = { disponible: 'Disponible', bloqueada: 'Bloqueada', completada: 'Completada' }
+  return labels[props.unit.estado] || 'Disponible'
 })
 
 function onSelect() {
-  if (props.unit.status !== 'locked') emit('select', props.unit.id)
+  if (props.unit.estado !== 'bloqueada') emit('select', props.unit.id)
 }
 </script>
 
@@ -87,15 +87,15 @@ function onSelect() {
   transform: scale(0.985);
 }
 
-.unit-card.is-completed {
+.unit-card.is-completada {
   border-color: rgba(52, 211, 153, 0.35);
 }
 
-.unit-card.is-available {
+.unit-card.is-disponible {
   border-color: rgba(142, 5, 194, 0.55);
 }
 
-.unit-card.is-locked {
+.unit-card.is-bloqueada {
   opacity: 0.55;
 }
 
@@ -125,15 +125,15 @@ function onSelect() {
   text-transform: uppercase;
 }
 
-.state-available {
+.state-disponible {
   color: var(--k-accent);
 }
 
-.state-locked {
+.state-bloqueada {
   color: var(--k-text-3);
 }
 
-.state-completed {
+.state-completada {
   color: var(--k-success);
 }
 
@@ -174,7 +174,7 @@ function onSelect() {
   color: var(--k-accent);
 }
 
-.unit-card.is-locked .unit-card-action {
+.unit-card.is-bloqueada .unit-card-action {
   color: var(--k-text-3);
 }
 </style>
