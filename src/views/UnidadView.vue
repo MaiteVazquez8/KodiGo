@@ -1,12 +1,10 @@
 <template>
   <div class="k-screen">
-    <EncabezadoApp :titulo="`Unidad ${unidad?.orden ?? ''}`" :back="linkCurso" />
-
     <main class="k-container unit">
-      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
+      <EstadoPantalla v-if="estadoCarga === 'cargando'" tipo="cargando" />
 
       <EstadoPantalla
-        v-else-if="estado === 'error'"
+        v-else-if="estadoCarga === 'error'"
         tipo="error"
         titulo="No pudimos cargar la unidad"
         :mensaje="mensajeError"
@@ -15,7 +13,7 @@
       />
 
       <EstadoPantalla
-        v-else-if="estado === 'inexistente'"
+        v-else-if="estadoCarga === 'inexistente'"
         tipo="inexistente"
         titulo="Unidad no encontrada"
         mensaje="La unidad que buscás no existe o ya no está disponible."
@@ -23,10 +21,25 @@
         @accion="verCursos"
       />
 
-      <template v-else-if="estado === 'listo' && unidad">
-        <p class="k-eyebrow">Curso {{ curso?.nombre }}</p>
-        <h1 class="k-h1 unit-title">{{ unidad.nombre }}</h1>
-        <p class="k-muted unit-desc">{{ unidad.descripcion }}</p>
+      <template v-else-if="estadoCarga === 'listo' && unidad">
+        <div class="unit-cabecera">
+          <button type="button" class="unit-boton-volver" aria-label="Volver" @click="volver">
+            <q-icon name="arrow_back" size="20px" />
+          </button>
+          <h1 class="unit-titulo-cabecera">Unidad {{ unidad.orden }}</h1>
+          <span class="unit-racha">
+            <q-icon name="local_fire_department" size="17px" />
+            {{ rachaDias }}d
+          </span>
+        </div>
+        <p class="unit-subtitulo">{{ unidad.descripcion }}</p>
+
+        <section v-if="objetivos.length" class="unit-bloque">
+          <p class="unit-bloque-titulo">Objetivos del aprendizaje</p>
+          <ul class="unit-objetivos">
+            <li v-for="objetivo in objetivos" :key="objetivo">{{ objetivo }}</li>
+          </ul>
+        </section>
 
         <div v-if="unidad.estado === 'bloqueada'" class="unit-locked-note">
           <q-icon name="lock" size="18px" />
@@ -34,7 +47,7 @@
         </div>
 
         <section class="lessons">
-          <p class="k-eyebrow">Clases</p>
+          <p class="unit-bloque-titulo">Clases Disponibles</p>
 
           <EstadoPantalla
             v-if="estadoLecciones === 'vacio'"
@@ -64,11 +77,21 @@
               </span>
               <span class="lesson-body">
                 <span class="lesson-title">{{ leccion.titulo }}</span>
-                <span class="lesson-meta">{{ leccion.cantidadPreguntas }} preguntas</span>
+                <span class="lesson-meta">
+                  {{ leccion.cantidadPreguntas }} preguntas
+                  <span class="lesson-xp">• +{{ xpClase }} XP</span>
+                </span>
               </span>
-              <q-icon name="chevron_right" size="18px" class="lesson-chev" />
             </button>
           </div>
+        </section>
+
+        <section class="unit-recompensa">
+          <q-icon name="card_giftcard" size="22px" />
+          <p>
+            Recompensa al finalizar la unidad: ¡Desbloquea el cofre con
+            {{ xpUnidad }} XP extras!
+          </p>
         </section>
 
         <button
@@ -77,8 +100,7 @@
           class="k-btn k-btn--primary k-btn--block unit-cta"
           @click="abrirLeccion(primeraDisponible)"
         >
-          <q-icon name="play_arrow" size="20px" />
-          Empezar primera clase
+          {{ hayCompletadas ? 'COMENZAR SIGUIENTE CLASE' : 'COMENZAR PRIMERA CLASE' }}
         </button>
       </template>
     </main>
@@ -88,65 +110,93 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import EncabezadoApp from '@/components/EncabezadoApp.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
-import { obtenerCurso, obtenerLecciones, obtenerUnidad } from '@/services/catalogo'
+import {
+  aSlug,
+  obtenerLecciones,
+  resolverCurso,
+  resolverUnidad,
+  rutaLeccion,
+  rutaUnidad,
+} from '@/services/catalogo'
+import { estado as estadoAuth } from '@/services/auth'
 
 const route = useRoute()
 const router = useRouter()
 
-const estado = ref('cargando')
+const estadoCarga = ref('cargando')
 const estadoLecciones = ref('cargando')
 const mensajeError = ref('')
 const unidad = ref(null)
 const curso = ref(null)
 const lecciones = ref([])
 
-const linkCurso = computed(() => ({
-  name: 'curso',
-  params: { courseId: route.params.courseId },
-}))
+const XP_POR_CLASE = 15
+const XP_POR_UNIDAD = 100
+
+const rachaDias = computed(() => estadoAuth.perfil?.racha_dias ?? 0)
+const xpClase = computed(() => XP_POR_CLASE)
+const xpUnidad = computed(() => XP_POR_UNIDAD)
+
+const hayCompletadas = computed(() =>
+  lecciones.value.some((l) => ['completada', 'aprobada'].includes(l.estado)),
+)
+
+// El mock lista los objetivos como viñetas; se derivan de las clases de la
+// unidad porque la tabla unidades no tiene columna de objetivos.
+const objetivos = computed(() => lecciones.value.map((leccion) => leccion.titulo).slice(0, 3))
+
+const linkCurso = computed(() =>
+  curso.value ? { name: 'curso', params: { curso: aSlug(curso.value.nombre) } } : { name: 'learn' },
+)
 
 const primeraDisponible = computed(
   () => lecciones.value.find((l) => l.estado !== 'bloqueada') ?? null,
 )
 
 async function cargar() {
-  estado.value = 'cargando'
+  estadoCarga.value = 'cargando'
   estadoLecciones.value = 'cargando'
   mensajeError.value = ''
   try {
-    const dataUnidad = await obtenerUnidad(route.params.courseId, route.params.unitId)
+    const dataCurso = await resolverCurso(route.params.curso)
+    if (!dataCurso) {
+      estadoCarga.value = 'inexistente'
+      return
+    }
+    curso.value = dataCurso
+
+    const dataUnidad = await resolverUnidad(dataCurso, route.params.unidad)
     if (!dataUnidad) {
-      estado.value = 'inexistente'
+      estadoCarga.value = 'inexistente'
       return
     }
     unidad.value = dataUnidad
 
-    const dataCurso = await obtenerCurso(route.params.courseId)
-    curso.value = dataCurso
+    // Canonicaliza la URL si se entró con UUID.
+    if (route.params.curso !== aSlug(dataCurso.nombre) || route.params.unidad !== aSlug(dataUnidad.nombre)) {
+      router.replace(rutaUnidad(dataUnidad, dataCurso))
+    }
 
     const dataLecciones = await obtenerLecciones(dataUnidad.id)
     lecciones.value = dataLecciones
     estadoLecciones.value = dataLecciones.length ? 'listo' : 'vacio'
-    estado.value = 'listo'
+    estadoCarga.value = 'listo'
   } catch (error) {
     mensajeError.value = error.message
-    estado.value = 'error'
+    estadoCarga.value = 'error'
   }
 }
 
 onMounted(cargar)
 
 function abrirLeccion(leccion) {
-  router.push({
-    name: 'leccion',
-    params: {
-      courseId: route.params.courseId,
-      unitId: route.params.unitId,
-      lessonId: leccion.id,
-    },
-  })
+  if (!curso.value || !unidad.value) return
+  router.push(rutaLeccion(leccion, unidad.value, curso.value))
+}
+
+function volver() {
+  router.push(linkCurso.value)
 }
 
 function verCursos() {
@@ -155,6 +205,113 @@ function verCursos() {
 </script>
 
 <style scoped>
+.unit-cabecera {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-3);
+}
+
+.unit-boton-volver {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  border: 1px solid var(--k-line);
+  background: var(--k-surface-2);
+  color: var(--k-text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.unit-titulo-cabecera {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--k-font-brand);
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unit-racha {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 5, 194, 0.35);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.unit-racha .q-icon {
+  color: var(--k-accent);
+}
+
+.unit-subtitulo {
+  margin-top: var(--k-space-3);
+  font-size: 14px;
+  color: var(--k-text-2);
+}
+
+.unit-bloque {
+  margin-top: var(--k-space-6);
+}
+
+.unit-bloque-titulo {
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.unit-objetivos {
+  display: grid;
+  gap: var(--k-space-2);
+  margin: var(--k-space-3) 0 0;
+  padding: var(--k-space-4) var(--k-space-4) var(--k-space-4) var(--k-space-7);
+  border-radius: var(--k-radius-sm);
+  border: 1px solid var(--k-line);
+  background: var(--k-surface-2);
+}
+
+.unit-objetivos li {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--k-text-2);
+}
+
+.lesson-xp {
+  color: var(--k-accent);
+  font-weight: 800;
+}
+
+.unit-recompensa {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-3);
+  margin-top: var(--k-space-5);
+  padding: var(--k-space-4);
+  border-radius: var(--k-radius-sm);
+  border: 1px solid rgba(142, 5, 194, 0.35);
+  background: var(--k-accent-softer);
+}
+
+.unit-recompensa .q-icon {
+  color: var(--k-accent);
+  flex-shrink: 0;
+}
+
+.unit-recompensa p {
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--k-text-2);
+}
+
 .unit-title {
   margin-top: var(--k-space-2);
 }

@@ -12,7 +12,17 @@ import NavegacionInferior from '@/components/NavegacionInferior.vue'
 
 const ruta = useRoute()
 
-const rutasNavegacion = ['inicio', 'cursos', 'curso']
+const rutasSinNavegacion = [
+  'bienvenida',
+  'acceso',
+  'learn',
+  'registro',
+  'ingreso',
+  'recuperar',
+  'restablecer',
+]
 
-const mostrarNavegacion = computed(() => rutasNavegacion.includes(ruta.name))
+const mostrarNavegacion = computed(
+  () => ruta.name !== null && !rutasSinNavegacion.includes(ruta.name),
+)
 </script>

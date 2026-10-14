@@ -24,54 +24,88 @@
       />
 
       <template v-else-if="estado === 'listo' && leccion">
-        <div class="results-card">
-          <p class="k-eyebrow">Lección {{ tituloLeccion }}</p>
+        <div class="results-cabecera">
+          <button type="button" class="results-volver" aria-label="Volver" @click="volverUnidad">
+            <q-icon name="arrow_back" size="20px" />
+          </button>
+          <h1 class="results-titulo-cabecera">
+            {{ resultados.aprobada ? 'Clase Completada' : tituloLeccion }}
+          </h1>
+          <span class="results-racha">
+            <q-icon name="local_fire_department" size="17px" />
+            {{ rachaDias }}d
+          </span>
+        </div>
 
-          <div class="results-summary" :class="{ 'is-passed': resultados.aprobada }">
-            <p class="results-label">
-              {{ resultados.aprobada ? '¡Lección aprobada!' : 'Lección completada' }}
-            </p>
-            <h1 class="k-h1">{{ resultados.porcentaje }}%</h1>
-            <p class="results-subtext">
-              {{ resultados.correctas }} de {{ resultados.total }} respuestas correctas.
-            </p>
+        <div class="results-cabecera-barra">
+          <div class="k-progress">
+            <i :style="{ width: progresoBarra + '%' }"></i>
           </div>
+        </div>
+
+        <section class="results-cuerpo">
+          <div class="results-check" :class="{ 'es-aprobada': resultados.aprobada }">
+            <q-icon :name="resultados.aprobada ? 'check' : 'close'" size="34px" />
+          </div>
+
+          <p class="results-titulo k-h1">
+            {{ resultados.aprobada ? '¡Excelente Trabajo!' : 'Casi lo tenés' }}
+          </p>
+          <p class="results-subtitulo">
+            {{
+              resultados.aprobada
+                ? `Has completado el ejercicio correctamente.`
+                : `Respondiste ${resultados.correctas} de ${resultados.total} correctamente.`
+            }}
+          </p>
 
           <div class="results-grid">
             <div class="result-tile">
-              <span>Total</span>
-              <strong>{{ resultados.total }}</strong>
+              <span>PRECISIÓN</span>
+              <strong :class="{ 'es-acento': resultados.aprobada }">
+                {{ resultados.porcentaje }}%
+              </strong>
             </div>
             <div class="result-tile">
-              <span>Correctas</span>
-              <strong>{{ resultados.correctas }}</strong>
+              <span>RESPUESTAS</span>
+              <strong>{{ resultados.correctas }} / {{ resultados.total }}</strong>
             </div>
             <div class="result-tile">
-              <span>Incorrectas</span>
-              <strong>{{ resultados.incorrectas }}</strong>
-            </div>
-            <div class="result-tile">
-              <span>Aciertos</span>
-              <strong>{{ resultados.porcentaje }}%</strong>
+              <span>TOTAL XP GANADO</span>
+              <strong class="es-acento">+{{ xpGanado }} XP</strong>
             </div>
           </div>
 
-          <div class="results-actions">
-            <button
-              type="button"
-              class="k-btn k-btn--primary k-btn--block k-btn--lg"
-              @click="volverUnidad"
-            >
-              Volver a la unidad
-            </button>
-            <button
-              type="button"
-              class="k-btn k-btn--ghost k-btn--block"
-              @click="reintentarLeccion"
-            >
-              Intentar nuevamente
-            </button>
-          </div>
+          <section v-if="resultados.aprobada" class="results-recompensa">
+            <q-icon name="workspace_premium" size="20px" />
+            <p>
+              +{{ xpGanado }} Puntos de Experiencia (XP). ¡Mantenés tu racha diaria de
+              {{ rachaDias }} días activa!
+            </p>
+          </section>
+
+          <section v-if="resultados.aprobada && tituloUnidad" class="results-progreso">
+            <p class="results-progreso-titulo">Progreso de Unidad {{ numeroUnidad }}</p>
+            <div class="k-progress results-barra">
+              <i :style="{ width: progresoUnidad + '%' }"></i>
+            </div>
+            <p class="results-progreso-detalle">
+              {{ clasesCompletadas }} de {{ clasesTotales }} Clases
+            </p>
+          </section>
+        </section>
+
+        <div class="results-actions">
+          <button
+            type="button"
+            class="k-btn k-btn--primary k-btn--block k-btn--lg"
+            @click="siguienteLeccion"
+          >
+            {{ siguienteDisponible ? 'SIGUIENTE LECCIÓN' : 'VOLVER AL MAPA' }}
+          </button>
+          <button type="button" class="k-btn k-btn--ghost k-btn--block" @click="reintentarLeccion">
+            REPETIR EJERCICIO
+          </button>
         </div>
       </template>
     </main>
@@ -81,29 +115,72 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import EncabezadoApp from '@/components/EncabezadoApp.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import {
+  obtenerCurso,
+  obtenerLecciones,
   obtenerLeccion,
   obtenerPreguntas,
   obtenerResultadosLeccion,
   obtenerUnidadPorId,
+  resolverCurso,
+  resolverLeccion,
+  resolverUnidad,
   reiniciarIntentoLeccion,
+  rutaLeccion,
   rutaPregunta,
   rutaResultados,
+  rutaUnidad,
 } from '@/services/catalogo'
+import { estado as estadoAuth } from '@/services/auth'
 
 const route = useRoute()
 const router = useRouter()
+
+const XP_POR_LECCION = 20
+const XP_POR_CORRECTA = 5
 
 const estado = ref('cargando')
 const mensajeError = ref('')
 const leccion = ref(null)
 const unidad = ref(null)
+const curso = ref(null)
 const preguntas = ref([])
 const resultados = ref(null)
+const leccionesUnidad = ref([])
 
 const tituloLeccion = computed(() => unidad.value?.nombre ?? leccion.value?.titulo ?? '')
+const tituloUnidad = computed(() => unidad.value?.nombre ?? '')
+const numeroUnidad = computed(() => unidad.value?.orden ?? 1)
+const rachaDias = computed(() => estadoAuth.perfil?.racha_dias ?? 0)
+
+// Recompensa: base de la clase + extra por cada respuesta correcta.
+const xpGanado = computed(() => {
+  if (!resultados.value?.aprobada) return 0
+  return XP_POR_LECCION + resultados.value.correctas * XP_POR_CORRECTA
+})
+
+const clasesTotales = computed(
+  () => leccionesUnidad.value.filter((l) => l.estado !== 'bloqueada').length,
+)
+const clasesCompletadas = computed(
+  () => leccionesUnidad.value.filter((l) => ['completada', 'aprobada'].includes(l.estado)).length,
+)
+const progresoUnidad = computed(() => {
+  if (!clasesTotales.value) return 0
+  return Math.round((clasesCompletadas.value / clasesTotales.value) * 100)
+})
+
+// La barra superior avanza con el avance dentro de la unidad.
+const progresoBarra = computed(() => progresoUnidad.value)
+
+const leccionSiguiente = computed(() => {
+  if (!leccion.value) return null
+  const indice = leccionesUnidad.value.findIndex((l) => l.id === leccion.value.id)
+  if (indice === -1) return null
+  return leccionesUnidad.value.slice(indice + 1).find((l) => l.estado !== 'bloqueada') ?? null
+})
+const siguienteDisponible = computed(() => Boolean(leccionSiguiente.value))
 
 const linkUnidad = computed(() => {
   if (unidad.value) {
@@ -115,27 +192,46 @@ const linkUnidad = computed(() => {
 async function cargar() {
   estado.value = 'cargando'
   mensajeError.value = ''
-  const lessonId = route.params.lessonId
+  const refLeccion = route.params.leccion
   try {
-    if (!lessonId) {
+    if (!refLeccion) {
       estado.value = 'inexistente'
       return
     }
 
-    const dataLeccion = await obtenerLeccion(lessonId)
+    let dataCurso = null
+    let dataUnidad = null
+    let dataLeccion = null
+
+    if (route.params.curso && route.params.unidad) {
+      dataCurso = await resolverCurso(route.params.curso)
+      dataUnidad = dataCurso ? await resolverUnidad(dataCurso, route.params.unidad) : null
+      dataLeccion = dataUnidad ? await resolverLeccion(dataUnidad, refLeccion) : null
+    } else {
+      dataLeccion = await obtenerLeccion(refLeccion)
+      if (dataLeccion) {
+        dataUnidad = await obtenerUnidadPorId(dataLeccion.unidadId)
+        if (dataUnidad) dataCurso = await obtenerCurso(dataUnidad.cursoId).catch(() => null)
+      }
+    }
+
     if (!dataLeccion) {
       estado.value = 'inexistente'
       return
     }
+
     leccion.value = dataLeccion
-
-    const dataUnidad = await obtenerUnidadPorId(dataLeccion.unidadId)
     unidad.value = dataUnidad
+    curso.value = dataCurso
 
-    const dataPreguntas = await obtenerPreguntas(lessonId)
+    const dataPreguntas = await obtenerPreguntas(dataLeccion.id)
     preguntas.value = dataPreguntas
 
-    resultados.value = obtenerResultadosLeccion(lessonId)
+    if (dataUnidad) {
+      leccionesUnidad.value = await obtenerLecciones(dataUnidad.id)
+    }
+
+    resultados.value = obtenerResultadosLeccion(dataLeccion.id)
     estado.value = 'listo'
   } catch (error) {
     mensajeError.value = error.message
@@ -145,12 +241,17 @@ async function cargar() {
 
 onMounted(cargar)
 
+function siguienteLeccion() {
+  if (leccionSiguiente.value && unidad.value) {
+    router.push(rutaLeccion(leccionSiguiente.value, unidad.value, curso.value))
+    return
+  }
+  volverUnidad()
+}
+
 function volverUnidad() {
   if (unidad.value) {
-    router.push({
-      name: 'unidad',
-      params: { courseId: unidad.value.cursoId, unitId: unidad.value.id },
-    })
+    router.push(rutaUnidad(unidad.value, curso.value))
     return
   }
   router.push('/courses')
@@ -160,11 +261,11 @@ function reintentarLeccion() {
   if (!leccion.value) return
   reiniciarIntentoLeccion(leccion.value.id)
   if (preguntas.value.length && unidad.value) {
-    router.push(rutaPregunta(leccion.value, unidad.value, preguntas.value[0].id))
+    router.push(rutaPregunta(leccion.value, unidad.value, curso.value, 1))
     return
   }
   if (unidad.value) {
-    router.push(rutaResultados(leccion.value, unidad.value))
+    router.push(rutaResultados(leccion.value, unidad.value, curso.value))
     return
   }
   router.push('/courses')
@@ -177,49 +278,103 @@ function verCursos() {
 
 <style scoped>
 .results {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--k-space-6);
 }
 
-.results-card {
-  width: 100%;
-  max-width: 370px;
-  padding: 24px 20px;
-  border-radius: 22px;
+.results-cabecera {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-3);
+}
+
+.results-volver {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 12px;
   border: 1px solid var(--k-line);
-  background: linear-gradient(180deg, rgba(53, 16, 71, 0.96), rgba(24, 9, 31, 0.98));
+  background: var(--k-surface-2);
+  color: var(--k-text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.results-summary {
+.results-titulo-cabecera {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--k-font-brand);
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.results-racha {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 5, 194, 0.35);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.results-racha .q-icon {
+  color: var(--k-accent);
+}
+
+.results-cabecera-barra {
   margin-top: var(--k-space-4);
-  padding: 22px 18px;
-  border-radius: 18px;
-  background: rgba(142, 5, 194, 0.12);
-  border: 1px solid rgba(142, 5, 194, 0.24);
+}
+
+.results-cabecera-barra .k-progress {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.results-cuerpo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: var(--k-space-6);
   text-align: center;
 }
 
-.results-summary.is-passed {
-  background: rgba(52, 211, 153, 0.12);
-  border-color: rgba(52, 211, 153, 0.3);
-}
-
-.results-label {
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.results-check {
+  width: 84px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--k-line);
   color: var(--k-text-2);
 }
 
-.results-summary h1 {
-  margin-top: var(--k-space-2);
-  font-size: 50px;
+.results-check.es-aprobada {
+  background: linear-gradient(180deg, #9d2ad8 0%, #7f00c7 100%);
+  border-color: transparent;
+  color: #fff;
 }
 
-.results-subtext {
-  margin-top: var(--k-space-2);
-  font-size: 13px;
+.results-titulo {
+  margin-top: var(--k-space-5);
+}
+
+.results-subtitulo {
+  margin-top: var(--k-space-3);
+  max-width: 320px;
+  font-size: 13.5px;
+  line-height: 1.55;
   color: var(--k-text-2);
 }
 
@@ -227,34 +382,91 @@ function verCursos() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--k-space-3);
-  margin-top: var(--k-space-5);
+  width: 100%;
+  margin-top: var(--k-space-6);
 }
 
 .result-tile {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 16px 14px;
-  border-radius: 14px;
-  background: var(--k-surface);
+  padding: var(--k-space-4);
+  border-radius: var(--k-radius-sm);
+  background: var(--k-surface-2);
   border: 1px solid var(--k-line);
-  text-align: center;
+  text-align: left;
 }
 
 .result-tile span {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
   color: var(--k-text-3);
 }
 
 .result-tile strong {
-  font-size: 24px;
-  letter-spacing: -0.03em;
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.result-tile strong.es-acento {
+  color: var(--k-accent);
+}
+
+.results-recompensa {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-3);
+  width: 100%;
+  margin-top: var(--k-space-4);
+  padding: var(--k-space-4);
+  border-radius: var(--k-radius-sm);
+  border: 1px solid rgba(142, 5, 194, 0.35);
+  background: var(--k-accent-softer);
+  text-align: left;
+}
+
+.results-recompensa .q-icon {
+  color: var(--k-accent);
+  flex-shrink: 0;
+}
+
+.results-recompensa p {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--k-text-2);
+}
+
+.results-progreso {
+  width: 100%;
+  margin-top: var(--k-space-4);
+  padding: var(--k-space-4);
+  border-radius: var(--k-radius-sm);
+  border: 1px solid var(--k-line);
+  background: var(--k-surface-2);
+  text-align: left;
+}
+
+.results-progreso-titulo {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.results-barra {
+  margin-top: var(--k-space-3);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.results-progreso-detalle {
+  margin-top: var(--k-space-2);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--k-text-2);
 }
 
 .results-actions {
   display: grid;
   gap: var(--k-space-3);
-  margin-top: var(--k-space-5);
+  margin-top: var(--k-space-6);
 }
 </style>

@@ -1,22 +1,15 @@
 <template>
   <nav class="bottom-nav">
     <RouterLink
-      to="/"
+      v-for="pestana in pestanas"
+      :key="pestana.clave"
+      :to="pestana.ruta"
       class="nav-item"
-      :class="{ 'is-active': activo === 'inicio' }"
-      aria-label="Inicio"
+      :class="{ 'is-active': activo === pestana.clave }"
+      :aria-label="pestana.etiqueta"
     >
-      <q-icon name="home" size="22px" />
-      <span class="nav-label">Inicio</span>
-    </RouterLink>
-    <RouterLink
-      to="/courses"
-      class="nav-item"
-      :class="{ 'is-active': activo === 'cursos' }"
-      aria-label="Cursos"
-    >
-      <q-icon name="school" size="22px" />
-      <span class="nav-label">Cursos</span>
+      <q-icon :name="pestana.icono" size="21px" />
+      <span class="nav-label">{{ pestana.etiqueta }}</span>
     </RouterLink>
   </nav>
 </template>
@@ -27,9 +20,32 @@ import { useRoute } from 'vue-router'
 
 const route = useRoute()
 
+const pestanas = [
+  { clave: 'learn', etiqueta: 'Learn', icono: 'school', ruta: '/learn' },
+  { clave: 'search', etiqueta: 'Search', icono: 'search', ruta: '/courses' },
+  { clave: 'review', etiqueta: 'Review', icono: 'refresh', ruta: '/review' },
+  { clave: 'dictionary', etiqueta: 'Dictionary', icono: 'menu_book', ruta: '/diccionario' },
+  { clave: 'more', etiqueta: 'More', icono: 'more_horiz', ruta: '/mas' },
+]
+
 const activo = computed(() => {
-  if (route.name === 'cursos' || route.name === 'curso') return 'cursos'
-  return 'inicio'
+  const porRuta = {
+    learn: 'learn',
+    unidad: 'learn',
+    leccion: 'learn',
+    'leccion-legada': 'learn',
+    'actividad-leccion': 'learn',
+    actividad: 'learn',
+    'resultados-leccion': 'learn',
+    cursos: 'search',
+    curso: 'search',
+    review: 'review',
+    diccionario: 'dictionary',
+    mas: 'more',
+    perfil: 'more',
+    configuracion: 'more',
+  }
+  return porRuta[route.name] || 'learn'
 })
 </script>
 
@@ -42,9 +58,9 @@ const activo = computed(() => {
   z-index: 30;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 10px 20px calc(12px + env(safe-area-inset-bottom));
+  justify-content: space-between;
+  gap: 4px;
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
   background: rgba(10, 4, 16, 0.96);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(10px);
@@ -53,12 +69,13 @@ const activo = computed(() => {
 
 .nav-item {
   display: flex;
+  flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-width: 94px;
-  padding: 8px 12px;
+  min-width: 0;
+  padding: 6px 2px;
   border-radius: 14px;
   color: rgba(255, 255, 255, 0.72);
   text-decoration: none;
@@ -74,8 +91,12 @@ const activo = computed(() => {
 }
 
 .nav-label {
-  font-size: 12px;
+  font-size: 10.5px;
   font-weight: 800;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 </style>

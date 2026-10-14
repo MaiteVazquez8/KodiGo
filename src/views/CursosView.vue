@@ -40,7 +40,7 @@ import { useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import TarjetaCurso from '@/components/TarjetaCurso.vue'
-import { obtenerCursos } from '@/services/catalogo'
+import { aSlug, obtenerCursos } from '@/services/catalogo'
 
 const router = useRouter()
 
@@ -63,8 +63,12 @@ async function cargar() {
 
 onMounted(cargar)
 
-function abrirCurso(courseId) {
-  router.push({ name: 'curso', params: { courseId } })
+// TarjetaCurso emite el curso completo. Si por lo que sea no llegara un curso
+// usable, no se navega: evitaría construir "/courses/" y caer en el redirect.
+function abrirCurso(curso) {
+  const slug = aSlug(curso?.nombre)
+  if (!slug) return
+  router.push({ name: 'curso', params: { curso: slug } })
 }
 </script>
 

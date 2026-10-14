@@ -5,8 +5,8 @@
     role="button"
     tabindex="0"
     aria-label="Abrir curso {{ curso.nombre }}"
-    @click="emitir('select', curso.id)"
-    @keyup.enter="emitir('select', curso.id)"
+    @click="emitir('select', curso)"
+    @keyup.enter="emitir('select', curso)"
   >
     <LogoCurso :curso="curso" />
 

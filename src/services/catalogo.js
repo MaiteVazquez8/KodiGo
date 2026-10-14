@@ -386,38 +386,125 @@ export async function comprobarRespuesta(preguntaId, opcionId) {
 }
 
 // ---------------------------------------------------------------------------
+// Perfiles públicos (Liga de Honor / Buscar amigos)
+// Solo se piden los campos que el mock muestra de otros usuarios. El correo
+// nunca vive en perfiles, asi que no hay dato privado en este select.
+// ---------------------------------------------------------------------------
+
+export async function obtenerPerfilesPublicos() {
+  const { data, error } = await supabase
+    .from('perfiles')
+    .select('id, nombre_usuario, nivel')
+    .order('experiencia', { ascending: false })
+    .limit(50)
+
+  if (error) throw crearError('No se pudieron cargar los perfiles.', error)
+
+  return (data ?? []).map((fila) => ({
+    id: fila.id,
+    alias: fila.nombre_usuario,
+    nivel: fila.nivel,
+  }))
+}
+
+export async function obtenerRanking() {
+  const { data, error } = await supabase
+    .from('perfiles')
+    .select('id, nombre_usuario, nivel, experiencia, racha_dias')
+    .order('experiencia', { ascending: false })
+    .limit(20)
+
+  if (error) throw crearError('No se pudo cargar el ranking.', error)
+
+  return data ?? []
+}
+
+// ---------------------------------------------------------------------------
+// Slugs para URLs legibles
+// ---------------------------------------------------------------------------
+// Las rutas usan nombres legibles ("javascript", "variables-y-datos") en vez de
+// UUID. El slug se deriva del nombre y se resuelve contra la base, asi que no
+// hace falta agregar columnas. Las rutas siguen aceptando UUID, de modo que los
+// enlaces con los IDs continues funcionando.
+
+export function aSlug(texto) {
+  return String(texto ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function pareceUuid(valor) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(valor ?? ''))
+}
+
+// Acepta slug o UUID y devuelve el curso.
+export async function resolverCurso(ref) {
+  if (!ref) return null
+  if (pareceUuid(ref)) return obtenerCurso(ref)
+  const cursos = await obtenerCursos()
+  return cursos.find((curso) => aSlug(curso.nombre) === ref) ?? null
+}
+
+// Acepta slug o UUID de unidad dentro del curso ya resuelto.
+export async function resolverUnidad(curso, ref) {
+  if (!curso || !ref) return null
+  if (pareceUuid(ref)) return obtenerUnidad(curso.id, ref)
+  const unidades = await obtenerUnidades(curso.id)
+  return unidades.find((unidad) => aSlug(unidad.nombre) === ref) ?? null
+}
+
+// Acepta slug o UUID de leccion dentro de la unidad ya resuelta.
+export async function resolverLeccion(unidad, ref) {
+  if (!unidad || !ref) return null
+  if (pareceUuid(ref)) return obtenerLeccion(ref)
+  const lecciones = await obtenerLecciones(unidad.id)
+  return lecciones.find((leccion) => aSlug(leccion.titulo) === ref) ?? null
+}
+
+// ---------------------------------------------------------------------------
 // Helpers de navegación
 // ---------------------------------------------------------------------------
 
-export function rutaUnidad(unidad) {
+export function rutaUnidad(unidad, curso) {
   return {
     name: 'unidad',
-    params: { courseId: unidad.cursoId, unitId: unidad.id },
+    params: { curso: aSlug(curso?.nombre), unidad: aSlug(unidad?.nombre) },
   }
 }
 
-export function rutaLeccion(leccion, unidad) {
+export function rutaLeccion(leccion, unidad, curso) {
   return {
     name: 'leccion',
-    params: { courseId: unidad.cursoId, unitId: unidad.id, lessonId: leccion.id },
-  }
-}
-
-export function rutaPregunta(leccion, unidad, preguntaId) {
-  return {
-    name: 'actividad-leccion',
     params: {
-      courseId: unidad.cursoId,
-      unitId: unidad.id,
-      lessonId: leccion.id,
-      activityId: preguntaId,
+      curso: aSlug(curso?.nombre),
+      unidad: aSlug(unidad?.nombre),
+      leccion: aSlug(leccion?.titulo),
     },
   }
 }
 
-export function rutaResultados(leccion, unidad) {
+export function rutaPregunta(leccion, unidad, curso, numeroPregunta) {
+  return {
+    name: 'actividad-leccion',
+    params: {
+      curso: aSlug(curso?.nombre),
+      unidad: aSlug(unidad?.nombre),
+      leccion: aSlug(leccion?.titulo),
+      pregunta: String(numeroPregunta ?? 1),
+    },
+  }
+}
+
+export function rutaResultados(leccion, unidad, curso) {
   return {
     name: 'resultados-leccion',
-    params: { courseId: unidad.cursoId, unitId: unidad.id, lessonId: leccion.id },
+    params: {
+      curso: aSlug(curso?.nombre),
+      unidad: aSlug(unidad?.nombre),
+      leccion: aSlug(leccion?.titulo),
+    },
   }
 }

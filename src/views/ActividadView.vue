@@ -64,11 +64,15 @@ import EjecutorActividad from '@/components/EjecutorActividad.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import {
   comprobarRespuesta,
+  obtenerCurso,
   obtenerLeccion,
   obtenerPreguntaPorId,
   obtenerPreguntas,
   obtenerUnidadPorId,
   registrarRespuestaLeccion,
+  resolverCurso,
+  resolverLeccion,
+  resolverUnidad,
   rutaLeccion,
   rutaPregunta,
   rutaResultados,
@@ -81,6 +85,7 @@ const estado = ref('cargando')
 const mensajeError = ref('')
 const leccion = ref(null)
 const unidad = ref(null)
+const curso = ref(null)
 const preguntas = ref([])
 const indice = ref(0)
 const corrigiendo = ref(false)
@@ -104,48 +109,77 @@ const tituloLeccion = computed(() => {
 
 const linkLeccion = computed(() => {
   if (!leccion.value || !unidad.value) return { name: 'cursos' }
-  return rutaLeccion(leccion.value, unidad.value)
+  return rutaLeccion(leccion.value, unidad.value, curso.value)
 })
 
 async function cargar() {
   estado.value = 'cargando'
   mensajeError.value = ''
   try {
-    let preguntaId = route.params.activityId
-    let lessonId = route.params.lessonId
+    const refLeccion = route.params.leccion
+    const numeroPregunta = Number.parseInt(route.params.pregunta, 10)
 
-    // Rutas legadas: /activity/:activityId sin curso ni unidad.
-    if (!lessonId) {
-      const pregunta = preguntaId ? await obtenerPreguntaPorId(preguntaId) : null
-      if (!pregunta) {
-        estado.value = 'inexistente'
-        return
+    let dataCurso = null
+    let dataUnidad = null
+    let dataLeccion = null
+    let indiceInicial = Number.isFinite(numeroPregunta) ? numeroPregunta - 1 : 0
+
+    if (refLeccion && route.params.curso && route.params.unidad) {
+      // Ruta canonica por slugs.
+      dataCurso = await resolverCurso(route.params.curso)
+      dataUnidad = dataCurso ? await resolverUnidad(dataCurso, route.params.unidad) : null
+      dataLeccion = dataUnidad ? await resolverLeccion(dataUnidad, refLeccion) : null
+    } else {
+      // Ruta legada: /activity/:activityId o /lesson/:leccion.
+      const refPregunta = route.params.activityId
+      let refLeccionId = refLeccion
+      if (!refLeccionId) {
+        const pregunta = refPregunta ? await obtenerPreguntaPorId(refPregunta) : null
+        if (!pregunta) {
+          estado.value = 'inexistente'
+          return
+        }
+        refLeccionId = pregunta.leccionId
       }
-      lessonId = pregunta.leccionId
+      dataLeccion = await obtenerLeccion(refLeccionId)
+      if (dataLeccion) {
+        dataUnidad = await obtenerUnidadPorId(dataLeccion.unidadId)
+        if (dataUnidad) dataCurso = await obtenerCurso(dataUnidad.cursoId).catch(() => null)
+      }
+      // En la ruta legada la pregunta llega por UUID.
+      if (route.params.activityId) {
+        const preguntasLegadas = dataLeccion ? await obtenerPreguntas(dataLeccion.id) : []
+        const pos = preguntasLegadas.findIndex((p) => p.id === route.params.activityId)
+        if (pos !== -1) indiceInicial = pos
+      }
     }
 
-    const dataLeccion = await obtenerLeccion(lessonId)
-    if (!dataLeccion) {
+    if (!dataLeccion || !dataUnidad) {
       estado.value = 'inexistente'
       return
     }
+
     leccion.value = dataLeccion
-
-    const dataUnidad = await obtenerUnidadPorId(dataLeccion.unidadId)
-    if (!dataUnidad) {
-      estado.value = 'inexistente'
-      return
-    }
     unidad.value = dataUnidad
+    curso.value = dataCurso
 
-    const dataPreguntas = await obtenerPreguntas(lessonId)
+    const dataPreguntas = await obtenerPreguntas(dataLeccion.id)
     preguntas.value = dataPreguntas
 
-    if (!route.params.courseId) {
-      const destino = dataPreguntas.length
-        ? rutaPregunta(dataLeccion, dataUnidad, preguntaId)
-        : rutaResultados(dataLeccion, dataUnidad)
-      router.replace(destino)
+    // Canonicaliza la URL con slugs.
+    if (dataCurso && dataPreguntas.length) {
+      const destino = rutaPregunta(dataLeccion, dataUnidad, dataCurso, indiceInicial + 1)
+      const esperado = destino.params
+      if (
+        route.params.curso !== esperado.curso ||
+        route.params.unidad !== esperado.unidad ||
+        route.params.leccion !== esperado.leccion ||
+        route.params.pregunta !== esperado.pregunta
+      ) {
+        router.replace(destino)
+      }
+    } else if (dataCurso) {
+      router.replace(rutaResultados(dataLeccion, dataUnidad, dataCurso))
     }
 
     if (!dataPreguntas.length) {
@@ -153,8 +187,7 @@ async function cargar() {
       return
     }
 
-    const indexEncontrado = dataPreguntas.findIndex((pregunta) => pregunta.id === preguntaId)
-    indice.value = indexEncontrado === -1 ? 0 : indexEncontrado
+    indice.value = Math.min(Math.max(indiceInicial, 0), dataPreguntas.length - 1)
     devolucion.value = null
 
     estado.value = 'listo'
@@ -167,14 +200,14 @@ async function cargar() {
 onMounted(cargar)
 
 watch(
-  () => route.params.activityId,
+  () => route.params.pregunta,
   () => {
     if (estado.value !== 'listo' || !preguntas.value.length) return
-    const indexEncontrado = preguntas.value.findIndex(
-      (pregunta) => pregunta.id === route.params.activityId,
-    )
-    if (indexEncontrado !== -1) {
-      indice.value = indexEncontrado
+    const numero = Number.parseInt(route.params.pregunta, 10)
+    if (!Number.isFinite(numero)) return
+    const nuevoIndice = Math.min(Math.max(numero - 1, 0), preguntas.value.length - 1)
+    if (nuevoIndice !== indice.value) {
+      indice.value = nuevoIndice
       devolucion.value = null
     }
   },
@@ -205,10 +238,10 @@ async function manejarComprobar(opcionId) {
 function siguiente() {
   if (!leccion.value || !unidad.value) return
   if (indice.value + 1 < preguntas.value.length) {
-    router.push(rutaPregunta(leccion.value, unidad.value, preguntas.value[indice.value + 1].id))
+    router.push(rutaPregunta(leccion.value, unidad.value, curso.value, indice.value + 2))
     return
   }
-  router.push(rutaResultados(leccion.value, unidad.value))
+  router.push(rutaResultados(leccion.value, unidad.value, curso.value))
 }
 
 function verCursos() {
