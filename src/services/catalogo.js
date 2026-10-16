@@ -1,85 +1,301 @@
 import { supabase } from '@/supabase'
 
 // ---------------------------------------------------------------------------
-// Progreso en memoria (por lección)
+// Progreso persistente
+//
+// La fuente de verdad es Supabase: cada respuesta se corrige y guarda en el
+// servidor y el estado final lo calcula el servidor. Aqui solo se mantiene
+// una copia en memoria para pintar las pantallas sin un round-trip en cada
+// una, que se hidrata con cargarProgreso() al recuperar la sesion.
 // ---------------------------------------------------------------------------
-// Esta etapa mantiene el progreso solo en memoria durante la sesión. La
-// estructura queda preparada para asociar luego cada lección a un usuario,
-// cuando se incorporen usuarios y persistencia.
 
-const intentosLeccion = new Map()
+const progresoPorLeccion = new Map()
+const resumenPorLeccion = new Map()
 const cantidadPreguntasPorLeccion = new Map()
+const intentoActivoPorLeccion = new Map()
+const leccionDeIntento = new Map()
 
-function crearEstadoIntento() {
-  return {
-    completado: false,
-    aprobada: false,
-    correctas: 0,
-    incorrectas: 0,
-    preguntasRespondidas: [],
+const PREFIJO_CLAVE_INTENTO = 'kodigo.intento.'
+
+export const CORRECTAS_MINIMAS_PARA_APROBAR = 2
+
+function generarUuid() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
   }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
+function claveDeIntento(leccionId) {
+  const clave = `${PREFIJO_CLAVE_INTENTO}${leccionId}`
+  let valor = null
+  try {
+    valor = localStorage.getItem(clave)
+  } catch {
+    valor = null
+  }
+  if (!valor) {
+    valor = generarUuid()
+    try {
+      localStorage.setItem(clave, valor)
+    } catch {
+      // Sin almacenamiento local la idempotencia se pierde al recargar,
+      // pero el servidor sigue siendo la fuente de verdad.
+    }
+  }
+  return valor
+}
+
+function borrarClaveDeIntento(leccionId) {
+  try {
+    localStorage.removeItem(`${PREFIJO_CLAVE_INTENTO}${leccionId}`)
+  } catch {
+    // sin almacenamiento local no hay nada que limpiar
+  }
+}
+
+function mapearResumen(fila) {
+  return {
+    total: Number(fila.cantidad_preguntas ?? fila.total ?? 0),
+    correctas: Number(fila.respuestas_correctas ?? fila.correctas ?? 0),
+    incorrectas: Number(fila.respuestas_incorrectas ?? fila.incorrectas ?? 0),
+    porcentaje: Math.round(Number(fila.porcentaje ?? 0)),
+    completado: Boolean(fila.completado),
+    aprobada: Boolean(fila.aprobado),
+  }
+}
+
+function mapearProgreso(fila) {
+  return {
+    leccionId: fila.leccion_id,
+    completada: Boolean(fila.completada),
+    aprobada: Boolean(fila.aprobada),
+    intentos: Number(fila.intentos ?? 0),
+    mejorPorcentaje: Math.round(Number(fila.mejor_porcentaje ?? 0)),
+    ultimoPorcentaje: Math.round(Number(fila.ultimo_porcentaje ?? 0)),
+    ultimoIntentoId: fila.ultimo_intento_id,
+    aprobadoEn: fila.aprobado_en,
+    actualizadoEn: fila.updated_at,
+  }
+}
+
+/**
+ * Descarga el progreso del usuario autenticado y lo deja disponible en
+ * memoria. Sin sesion no hay progreso que leer y se limpia la copia local.
+ */
+export async function cargarProgreso() {
+  progresoPorLeccion.clear()
+  resumenPorLeccion.clear()
+
+  const { data: sesion } = await supabase.auth.getSession()
+  if (!sesion?.session) return progresoPorLeccion
+
+  const { data, error } = await supabase.rpc('obtener_progreso')
+  if (error) throw crearError('No se pudo cargar el progreso.', error)
+
+  const filas = data ?? []
+  for (const fila of filas) {
+    progresoPorLeccion.set(fila.leccion_id, mapearProgreso(fila))
+  }
+
+  // El resumen de la ultima intento aporta los conteos exactos de
+  // correctas e incorrectas, que progreso_lecciones no guarda.
+  const idsIntentos = filas.map((fila) => fila.ultimo_intento_id).filter(Boolean)
+  if (idsIntentos.length) {
+    const { data: ultimos, error: errorUltimos } = await supabase
+      .from('intentos')
+      .select(
+        'id, leccion_id, cantidad_preguntas, respuestas_correctas, respuestas_incorrectas, porcentaje, completado, aprobado',
+      )
+      .in('id', idsIntentos)
+
+    if (errorUltimos) throw crearError('No se pudieron cargar los últimos intentos.', errorUltimos)
+    for (const fila of ultimos ?? []) {
+      resumenPorLeccion.set(fila.leccion_id, mapearResumen(fila))
+    }
+  }
+
+  return progresoPorLeccion
 }
 
 export function obtenerIntentoLeccion(leccionId) {
-  if (!leccionId) return null
-  return intentosLeccion.get(leccionId) ?? null
+  return progresoPorLeccion.get(leccionId) ?? null
 }
 
-function asegurarIntentoLeccion(leccionId) {
-  if (!intentosLeccion.has(leccionId)) {
-    intentosLeccion.set(leccionId, crearEstadoIntento())
+/**
+ * Empieza (o recupera) el intento de una leccion. La clave de idempotencia
+ * se guarda en el dispositivo, asi que recargar la pagina no crea un intento
+ * nuevo ni duplica respuestas.
+ */
+export async function iniciarIntento(leccionId) {
+  if (!leccionId) throw crearError('Falta la lección para iniciar el intento.')
+
+  const { data, error } = await supabase.rpc('iniciar_intento', {
+    p_leccion_id: leccionId,
+    p_clave_idempotencia: claveDeIntento(leccionId),
+  })
+
+  if (error) throw crearError('No se pudo iniciar el intento.', error)
+
+  const fila = (data && data[0]) || {}
+  const total = fila.total ?? cantidadPreguntasPorLeccion.get(leccionId) ?? 0
+  cantidadPreguntasPorLeccion.set(leccionId, total)
+  intentoActivoPorLeccion.set(leccionId, fila.intento_id)
+  leccionDeIntento.set(fila.intento_id, leccionId)
+
+  return { intentoId: fila.intento_id, yaExistia: Boolean(fila.ya_existia), total }
+}
+
+export function obtenerIntentoActivo(leccionId) {
+  return intentoActivoPorLeccion.get(leccionId) ?? null
+}
+
+/**
+ * Registra la respuesta de una pregunta. El servidor corrige contra
+ * soluciones, guarda la respuesta y devuelve el estado recalculado, asi que
+ * el cliente nunca decide si acertó.
+ */
+export async function registrarRespuesta(intentoId, preguntaId, opcionId) {
+  if (!intentoId) throw crearError('No hay un intento activo.')
+
+  const { data, error } = await supabase.rpc('registrar_respuesta', {
+    p_intento_id: intentoId,
+    p_pregunta_id: preguntaId,
+    p_opcion_id: opcionId,
+  })
+
+  if (error) throw crearError('No se pudo registrar la respuesta.', error)
+
+  const fila = (data && data[0]) || {}
+  const leccionId = leccionDeIntento.get(intentoId)
+  const resumen = {
+    porcentaje: Math.round(Number(fila.porcentaje ?? 0)),
+    correctas: Number(fila.correctas ?? 0),
+    incorrectas: Math.max(Number(fila.total ?? 0) - Number(fila.correctas ?? 0), 0),
+    total: Number(fila.total ?? 0),
+    completado: Boolean(fila.completado),
   }
-  return intentosLeccion.get(leccionId)
+
+  if (leccionId) {
+    resumenPorLeccion.set(leccionId, { ...resumen, aprobada: Number(fila.correctas ?? 0) >= CORRECTAS_MINIMAS_PARA_APROBAR && Boolean(fila.completado) })
+  }
+
+  return {
+    correcta: Boolean(fila.correcta),
+    explicacion: fila.explicacion ?? '',
+    yaRegistrada: Boolean(fila.ya_registrada),
+    ...resumen,
+  }
 }
 
+/**
+ * Cierra el intento. El servidor calcula el resultado, actualiza el progreso
+ * de la leccion y otorga la experiencia solo la primera vez que se aprueba.
+ * Es idempotente: llamarla de nuevo devuelve lo mismo sin duplicar nada.
+ */
+export async function finalizarIntento(intentoId) {
+  if (!intentoId) throw crearError('No hay un intento activo.')
+
+  const { data, error } = await supabase.rpc('finalizar_intento', {
+    p_intento_id: intentoId,
+  })
+
+  if (error) throw crearError('No se pudo finalizar el intento.', error)
+
+  const fila = (data && data[0]) || {}
+  const leccionId = leccionDeIntento.get(intentoId)
+  const resumen = mapearResumen({
+    cantidad_preguntas: fila.total,
+    respuestas_correctas: fila.correctas,
+    respuestas_incorrectas: fila.incorrectas,
+    porcentaje: fila.porcentaje,
+    completado: fila.completado,
+    aprobado: fila.aprobado,
+  })
+
+  if (leccionId) {
+    resumenPorLeccion.set(leccionId, resumen)
+    // El intento quedo cerrado: la proxima vez que se repita la leccion
+    // tiene que empezar uno nuevo.
+    borrarClaveDeIntento(leccionId)
+    intentoActivoPorLeccion.delete(leccionId)
+    leccionDeIntento.delete(intentoId)
+  }
+
+  await cargarProgreso()
+
+  return { ...resumen, xpGanado: Number(fila.xp_ganado ?? 0) }
+}
+
+/** Permite volver a practicar una leccion creando un intento nuevo. */
 export function reiniciarIntentoLeccion(leccionId) {
   if (!leccionId) return null
-  intentosLeccion.set(leccionId, crearEstadoIntento())
-  return intentosLeccion.get(leccionId)
-}
-
-export function registrarRespuestaLeccion(leccionId, preguntaId, esCorrecta) {
-  const estado = asegurarIntentoLeccion(leccionId)
-
-  // Protección contra dobles contabilizaciones: una pregunta solo se cuenta una vez.
-  if (estado.preguntasRespondidas.includes(preguntaId)) {
-    return estado
-  }
-
-  estado.preguntasRespondidas.push(preguntaId)
-  if (esCorrecta) estado.correctas += 1
-  else estado.incorrectas += 1
-
-  const total = cantidadPreguntasPorLeccion.get(leccionId)
-  if (total) {
-    estado.completado = estado.preguntasRespondidas.length >= total
-  }
-
-  // Regla: una lección se aprueba con al menos 2 respuestas correctas de 3.
-  estado.aprobada = estado.correctas >= 2
-
-  return estado
+  borrarClaveDeIntento(leccionId)
+  intentoActivoPorLeccion.delete(leccionId)
+  resumenPorLeccion.delete(leccionId)
+  return null
 }
 
 export function obtenerResultadosLeccion(leccionId) {
-  const intento = obtenerIntentoLeccion(leccionId)
-  const total =
-    cantidadPreguntasPorLeccion.get(leccionId) ?? intento?.preguntasRespondidas.length ?? 0
-  const correctas = intento?.correctas ?? 0
-  const incorrectas = intento?.incorrectas ?? 0
-  const porcentaje = total ? Math.round((correctas / total) * 100) : 0
+  const progreso = progresoPorLeccion.get(leccionId)
+  const resumen = resumenPorLeccion.get(leccionId)
+  const total = resumen?.total ?? cantidadPreguntasPorLeccion.get(leccionId) ?? 0
 
   return {
     total,
-    correctas,
-    incorrectas,
-    porcentaje,
-    aprobada: correctas >= 2,
-    completado: intento?.completado ?? false,
+    correctas: resumen?.correctas ?? 0,
+    incorrectas: resumen?.incorrectas ?? 0,
+    porcentaje: resumen?.porcentaje ?? progreso?.ultimoPorcentaje ?? 0,
+    aprobada: progreso?.aprobada ?? resumen?.aprobada ?? false,
+    completado: progreso?.completada ?? resumen?.completado ?? false,
   }
 }
 
-// ---------------------------------------------------------------------------
+/** Historial de intentos de una leccion, del mas reciente al mas antiguo. */
+export async function obtenerHistorialLeccion(leccionId) {
+  if (!leccionId) return []
+
+  const { data, error } = await supabase
+    .from('intentos')
+    .select(
+      'id, estado, porcentaje, respuestas_correctas, respuestas_incorrectas, cantidad_preguntas, completado, aprobado, iniciado_at, finalizado_at',
+    )
+    .eq('leccion_id', leccionId)
+    .order('iniciado_at', { ascending: false })
+
+  if (error) throw crearError('No se pudo cargar el historial de la lección.', error)
+  return (data ?? []).map((fila) => ({
+    id: fila.id,
+    estado: fila.estado,
+    porcentaje: Math.round(Number(fila.porcentaje ?? 0)),
+    correctas: fila.respuestas_correctas,
+    incorrectas: fila.respuestas_incorrectas,
+    total: fila.cantidad_preguntas,
+    completado: Boolean(fila.completado),
+    aprobada: Boolean(fila.aprobado),
+    iniciadoEn: fila.iniciado_at,
+    finalizadoEn: fila.finalizado_at,
+  }))
+}
+
+/** Resumen global para el perfil y la pantalla de progreso. */
+export function obtenerResumenProgreso() {
+  let aprobadas = 0
+  let completadas = 0
+  let intentos = 0
+
+  for (const progreso of progresoPorLeccion.values()) {
+    if (progreso.aprobada) aprobadas += 1
+    if (progreso.completada) completadas += 1
+    intentos += progreso.intentos
+  }
+
+  return { aprobadas, completadas, intentos }
+}
 // Consultas a Supabase
 // ---------------------------------------------------------------------------
 

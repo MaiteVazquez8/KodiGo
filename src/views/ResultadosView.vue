@@ -117,7 +117,9 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import {
+  finalizarIntento,
   obtenerCurso,
+  obtenerIntentoActivo,
   obtenerLecciones,
   obtenerLeccion,
   obtenerPreguntas,
@@ -231,7 +233,15 @@ async function cargar() {
       leccionesUnidad.value = await obtenerLecciones(dataUnidad.id)
     }
 
-    resultados.value = obtenerResultadosLeccion(dataLeccion.id)
+    // Cierra el intento: el servidor calcula el resultado, actualiza el
+    // progreso de la leccion y otorga la experiencia. Si el intento ya
+    // estaba cerrado devuelve lo mismo sin duplicar nada.
+    const intentoId = obtenerIntentoActivo(dataLeccion.id)
+    if (intentoId) {
+      resultados.value = await finalizarIntento(intentoId)
+    } else {
+      resultados.value = obtenerResultadosLeccion(dataLeccion.id)
+    }
     estado.value = 'listo'
   } catch (error) {
     mensajeError.value = error.message

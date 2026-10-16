@@ -31,6 +31,14 @@
       />
 
       <template v-else-if="estado === 'listo' && leccion && unidad">
+        <div v-if="sinSesion" class="activity-aviso">
+          Estás practicando sin iniciar sesión. Podés resolver la clase, pero este
+          intento no se va a guardar.
+          <RouterLink class="activity-aviso-enlace" :to="{ name: 'acceso' }">
+            Entrar como invitado
+          </RouterLink>
+        </div>
+
         <p class="k-eyebrow">{{ tituloLeccion }}</p>
 
         <div v-if="total" class="activity-progress">
@@ -65,11 +73,13 @@ import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import {
   comprobarRespuesta,
   obtenerCurso,
+  obtenerIntentoActivo,
   obtenerLeccion,
   obtenerPreguntaPorId,
   obtenerPreguntas,
   obtenerUnidadPorId,
-  registrarRespuestaLeccion,
+  iniciarIntento,
+  registrarRespuesta,
   resolverCurso,
   resolverLeccion,
   resolverUnidad,
@@ -90,6 +100,8 @@ const preguntas = ref([])
 const indice = ref(0)
 const corrigiendo = ref(false)
 const devolucion = ref(null)
+const intentoId = ref(null)
+const sinSesion = ref(false)
 
 const preguntaActual = computed(() => preguntas.value[indice.value] ?? null)
 
@@ -190,6 +202,23 @@ async function cargar() {
     indice.value = Math.min(Math.max(indiceInicial, 0), dataPreguntas.length - 1)
     devolucion.value = null
 
+    // El intento se crea una sola vez por pasada. La clave de idempotencia
+    // vive en el dispositivo, asi que recargar no genera otro intento.
+    const intentoExistente = obtenerIntentoActivo(dataLeccion.id)
+    if (intentoExistente) {
+      intentoId.value = intentoExistente
+    } else {
+      try {
+        const intento = await iniciarIntento(dataLeccion.id)
+        intentoId.value = intento.intentoId
+        sinSesion.value = false
+      } catch {
+        // Sin sesion se puede practicar igual, pero no queda registrado.
+        intentoId.value = null
+        sinSesion.value = true
+      }
+    }
+
     estado.value = 'listo'
   } catch (error) {
     mensajeError.value = error.message
@@ -219,8 +248,12 @@ async function manejarComprobar(opcionId) {
   devolucion.value = null
   const pregunta = preguntaActual.value
   try {
-    const resultado = await comprobarRespuesta(pregunta.id, opcionId)
-    registrarRespuestaLeccion(leccion.value.id, pregunta.id, resultado.correcta)
+    // Con intento abierto el servidor corrige, guarda y recalcula.
+    // Sin sesion se cae a la comprobacion simple, que tampoco guarda nada.
+    const resultado = intentoId.value
+      ? await registrarRespuesta(intentoId.value, pregunta.id, opcionId)
+      : await comprobarRespuesta(pregunta.id, opcionId)
+
     devolucion.value = {
       estado: resultado.correcta ? 'correcta' : 'incorrecta',
       explicacion: resultado.explicacion,
@@ -265,5 +298,23 @@ function verCursos() {
 
 .activity-runner-wrap {
   margin-top: var(--k-space-6);
+}
+
+.activity-aviso {
+  margin-bottom: var(--k-space-4);
+  padding: var(--k-space-3) var(--k-space-4);
+  border-radius: var(--k-radius-md);
+  background: var(--k-surface-2);
+  color: var(--k-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.activity-aviso-enlace {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--k-accent);
+  font-weight: 700;
+  text-decoration: underline;
 }
 </style>

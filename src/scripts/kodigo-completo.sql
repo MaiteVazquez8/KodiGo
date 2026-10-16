@@ -100,28 +100,56 @@ create table if not exists progreso_lecciones (
     aprobada boolean not null default false,
     intentos integer not null default 0,
     mejor_porcentaje numeric(5,2) not null default 0,
+    ultimo_porcentaje numeric(5,2) not null default 0,
+    ultimo_intento_id uuid,
+    aprobado_en timestamptz,
     updated_at timestamptz not null default now(),
     constraint progreso_usuario_leccion_unique unique (usuario_id, leccion_id),
     constraint progreso_intentos_check check (intentos >= 0),
-    constraint progreso_porcentaje_check check (mejor_porcentaje >= 0 and mejor_porcentaje <= 100)
+    constraint progreso_mejor_porcentaje_check check (mejor_porcentaje >= 0 and mejor_porcentaje <= 100),
+    constraint progreso_ultimo_porcentaje_check check (ultimo_porcentaje >= 0 and ultimo_porcentaje <= 100)
 );
 
 create table if not exists intentos (
     id uuid primary key default gen_random_uuid(),
     usuario_id uuid not null references perfiles(id) on delete cascade,
     leccion_id uuid not null references lecciones(id) on delete cascade,
+    clave_idempotencia uuid not null,
+    estado varchar(20) not null default 'en_curso',
+    iniciado_at timestamptz not null default now(),
+    finalizado_at timestamptz,
     cantidad_preguntas integer not null default 0,
     respuestas_correctas integer not null default 0,
     respuestas_incorrectas integer not null default 0,
     porcentaje numeric(5,2) not null default 0,
     completado boolean not null default false,
     aprobado boolean not null default false,
+    xp_ganado integer not null default 0,
     created_at timestamptz not null default now(),
+    constraint intentos_clave_unica unique (usuario_id, clave_idempotencia),
+    constraint intentos_estado_check check (estado in ('en_curso', 'completado', 'abandonado')),
     constraint intentos_cantidad_check check (cantidad_preguntas >= 0),
     constraint intentos_correctas_check check (respuestas_correctas >= 0),
     constraint intentos_incorrectas_check check (respuestas_incorrectas >= 0),
-    constraint intentos_porcentaje_check check (porcentaje >= 0 and porcentaje <= 100)
+    constraint intentos_porcentaje_check check (porcentaje >= 0 and porcentaje <= 100),
+    constraint intentos_cerrado_check check (
+        (estado = 'en_curso' and finalizado_at is null)
+        or (estado <> 'en_curso' and finalizado_at is not null)
+    )
 );
+
+-- La FK de progreso_lecciones se agrega aca porque intentos se define despues.
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint where conname = 'progreso_lecciones_ultimo_intento_fkey'
+    ) then
+        alter table progreso_lecciones
+        add constraint progreso_lecciones_ultimo_intento_fkey
+        foreign key (ultimo_intento_id) references intentos(id) on delete set null;
+    end if;
+end;
+$$;
 
 create table if not exists respuestas_intento (
     id uuid primary key default gen_random_uuid(),
@@ -346,20 +374,11 @@ for select
 to authenticated
 using (usuario_id = auth.uid());
 
+-- progreso_lecciones solo admite lectura directa desde el cliente.
+-- Las escrituras pasan por finalizar_intento() para que el servidor sea
+-- el unico que puede marcar una leccion como completada o aprobada.
 drop policy if exists "progreso propio inserta" on progreso_lecciones;
-create policy "progreso propio inserta"
-on progreso_lecciones
-for insert
-to authenticated
-with check (usuario_id = auth.uid());
-
 drop policy if exists "progreso propio modifica" on progreso_lecciones;
-create policy "progreso propio modifica"
-on progreso_lecciones
-for update
-to authenticated
-using (usuario_id = auth.uid())
-with check (usuario_id = auth.uid());
 
 drop policy if exists "intentos propios visibles" on intentos;
 create policy "intentos propios visibles"
@@ -368,12 +387,9 @@ for select
 to authenticated
 using (usuario_id = auth.uid());
 
+-- intentos solo admite lectura directa desde el cliente.
+-- El alta y el cierre se hacen en iniciar_intento() / finalizar_intento().
 drop policy if exists "intentos propios inserta" on intentos;
-create policy "intentos propios inserta"
-on intentos
-for insert
-to authenticated
-with check (usuario_id = auth.uid());
 
 drop policy if exists "respuestas propias visibles" on respuestas_intento;
 create policy "respuestas propias visibles"
@@ -389,19 +405,10 @@ using (
     )
 );
 
+-- respuestas_intento solo admite lectura directa desde el cliente.
+-- El insert lo hace registrar_respuesta(), que corrige contra soluciones
+-- y evita que el cliente marque su propia respuesta como correcta.
 drop policy if exists "respuestas propias inserta" on respuestas_intento;
-create policy "respuestas propias inserta"
-on respuestas_intento
-for insert
-to authenticated
-with check (
-    exists (
-        select 1
-        from intentos
-        where intentos.id = respuestas_intento.intento_id
-        and intentos.usuario_id = auth.uid()
-    )
-);
 
 drop policy if exists "amistades propias visibles" on amistades;
 create policy "amistades propias visibles"
@@ -451,8 +458,489 @@ for select
 to authenticated
 using (false);
 
+create function cantidad_preguntas_publicadas(p_leccion_id uuid)
+returns integer
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+    select count(*)::integer
+    from preguntas
+    where leccion_id = p_leccion_id
+      and estado_publicacion = 'publicado';
+$$;
+
+create function es_leccion_publicada(p_leccion_id uuid)
+returns boolean
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+    select exists (
+        select 1
+        from lecciones
+        where id = p_leccion_id
+          and estado_publicacion in ('publicado', 'bloqueada')
+    );
+$$;
+
+create function recalcular_intento(p_intento_id uuid)
+returns table (
+    total integer,
+    correctas integer,
+    incorrectas integer,
+    porcentaje numeric,
+    completado boolean,
+    aprobado boolean
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid;
+    v_leccion uuid;
+    v_total integer;
+    v_correctas integer;
+    v_respondidas integer;
+    v_estado varchar;
+begin
+    select i.usuario_id, i.leccion_id
+    into v_usuario, v_leccion
+    from intentos i
+    where i.id = p_intento_id
+      and i.usuario_id = auth.uid();
+
+    if v_usuario is null then
+        raise exception 'El intento no existe o no pertenece al usuario';
+    end if;
+
+    select estado into v_estado from intentos where id = p_intento_id;
+
+    v_total := cantidad_preguntas_publicadas(v_leccion);
+    select count(*)::integer,
+           count(*) filter (where r.correcta)::integer
+    into v_respondidas, v_correctas
+    from respuestas_intento r
+    where r.intento_id = p_intento_id;
+
+    total := v_total;
+    correctas := v_correctas;
+    incorrectas := greatest(v_respondidas - v_correctas, 0);
+    porcentaje := case
+        when v_total = 0 then 0
+        else round(v_correctas::numeric * 100 / v_total, 2)
+    end;
+    completado := v_total > 0 and v_respondidas >= v_total;
+    aprobado := completado and v_correctas >= 2;
+
+    return next;
+end;
+$$;
+
+create or replace function iniciar_intento(
+    p_leccion_id uuid,
+    p_clave_idempotencia uuid
+)
+returns table (
+    intento_id uuid,
+    ya_existia boolean,
+    total integer
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_id uuid;
+    v_leccion_existente uuid;
+    v_existente boolean;
+    v_total integer;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para iniciar un intento';
+    end if;
+
+    if not es_leccion_publicada(p_leccion_id) then
+        raise exception 'La leccion no existe o no esta publicada';
+    end if;
+
+    select i.id, i.leccion_id into v_id, v_leccion_existente
+    from intentos i
+    where i.usuario_id = v_usuario and i.clave_idempotencia = p_clave_idempotencia;
+
+    if v_id is not null and v_leccion_existente <> p_leccion_id then
+        raise exception 'La clave de idempotencia ya fue usada para otra leccion';
+    end if;
+
+    if v_id is not null then
+        v_existente := true;
+    else
+        v_total := cantidad_preguntas_publicadas(p_leccion_id);
+        insert into intentos (usuario_id, leccion_id, clave_idempotencia, estado, cantidad_preguntas)
+        values (v_usuario, p_leccion_id, p_clave_idempotencia, 'en_curso', v_total)
+        on conflict (usuario_id, clave_idempotencia) do nothing;
+
+        select i.id into v_id
+        from intentos i
+        where i.usuario_id = v_usuario and i.clave_idempotencia = p_clave_idempotencia;
+
+        v_existente := false;
+    end if;
+
+    select i.cantidad_preguntas into v_total from intentos i where i.id = v_id;
+
+    return query select v_id, v_existente, coalesce(v_total, 0);
+end;
+$$;
+
+create or replace function registrar_respuesta(
+    p_intento_id uuid,
+    p_pregunta_id uuid,
+    p_opcion_id uuid
+)
+returns table (
+    correcta boolean,
+    explicacion text,
+    ya_registrada boolean,
+    porcentaje numeric,
+    correctas integer,
+    total integer,
+    completado boolean
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_leccion uuid;
+    v_estado varchar;
+    v_correccion record;
+    v_ya_registrada boolean := false;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para responder';
+    end if;
+
+    select i.leccion_id, i.estado into v_leccion, v_estado
+    from intentos i
+    where i.id = p_intento_id and i.usuario_id = v_usuario;
+
+    if v_leccion is null then
+        raise exception 'El intento no existe o no pertenece al usuario';
+    end if;
+
+    if v_estado <> 'en_curso' then
+        raise exception 'El intento ya fue finalizado';
+    end if;
+
+    if not exists (
+        select 1 from preguntas
+        where id = p_pregunta_id
+          and leccion_id = v_leccion
+          and estado_publicacion = 'publicado'
+    ) then
+        raise exception 'La pregunta no pertenece a la leccion o no esta publicada';
+    end if;
+
+    if not exists (
+        select 1 from respuestas_intento where intento_id = p_intento_id and pregunta_id = p_pregunta_id
+    ) then
+        select c.correcta, c.explicacion into v_correccion
+        from comprobar_respuesta(p_pregunta_id, p_opcion_id) c;
+
+        insert into respuestas_intento (intento_id, pregunta_id, opcion_id, correcta)
+        values (p_intento_id, p_pregunta_id, p_opcion_id, v_correccion.correcta)
+        on conflict (intento_id, pregunta_id) do nothing;
+    else
+        v_ya_registrada := true;
+        select c.correcta, c.explicacion into v_correccion
+        from respuestas_intento r
+        join comprobar_respuesta(r.pregunta_id, r.opcion_id) c on true
+        where r.intento_id = p_intento_id and r.pregunta_id = p_pregunta_id;
+    end if;
+
+    update intentos i
+    set respuestas_correctas = (select count(*)::integer from respuestas_intento r where r.intento_id = i.id and r.correcta),
+        respuestas_incorrectas = (select count(*)::integer from respuestas_intento r where r.intento_id = i.id and not r.correcta)
+    where i.id = p_intento_id;
+
+    return query
+    select v_correccion.correcta,
+           v_correccion.explicacion,
+           v_ya_registrada,
+           r.porcentaje,
+           r.correctas,
+           r.total,
+           r.completado
+    from recalcular_intento(p_intento_id) r;
+end;
+$$;
+
+create or replace function finalizar_intento(p_intento_id uuid)
+returns table (
+    porcentaje numeric,
+    correctas integer,
+    incorrectas integer,
+    total integer,
+    completado boolean,
+    aprobado boolean,
+    xp_ganado integer
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_leccion uuid;
+    v_estado varchar;
+    v_resumen record;
+    v_xp integer;
+    v_ya_aprobada boolean;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para finalizar un intento';
+    end if;
+
+    select i.leccion_id, i.estado into v_leccion, v_estado
+    from intentos i
+    where i.id = p_intento_id and i.usuario_id = v_usuario;
+
+    if v_leccion is null then
+        raise exception 'El intento no existe o no pertenece al usuario';
+    end if;
+
+    if v_estado <> 'en_curso' then
+        select * into v_resumen from recalcular_intento(p_intento_id);
+        select xp_ganado into v_xp from intentos where id = p_intento_id;
+        return query
+        select v_resumen.porcentaje, v_resumen.correctas, v_resumen.incorrectas,
+               v_resumen.total, v_resumen.completado, v_resumen.aprobado, v_xp;
+        return;
+    end if;
+
+    select * into v_resumen from recalcular_intento(p_intento_id);
+
+    select p.aprobada into v_ya_aprobada
+    from progreso_lecciones p
+    where p.usuario_id = v_usuario and p.leccion_id = v_leccion;
+
+    v_ya_aprobada := coalesce(v_ya_aprobada, false);
+
+    update intentos
+    set estado = 'completado',
+        finalizado_at = now(),
+        cantidad_preguntas = v_resumen.total,
+        respuestas_correctas = v_resumen.correctas,
+        respuestas_incorrectas = v_resumen.incorrectas,
+        porcentaje = v_resumen.porcentaje,
+        completado = v_resumen.completado,
+        aprobado = v_resumen.aprobado
+    where id = p_intento_id and usuario_id = v_usuario;
+
+    insert into progreso_lecciones (
+        usuario_id, leccion_id, completada, aprobada, intentos,
+        mejor_porcentaje, ultimo_porcentaje, ultimo_intento_id, aprobado_en, updated_at
+    )
+    values (
+        v_usuario, v_leccion,
+        v_resumen.completado, v_resumen.aprobado, 1,
+        v_resumen.porcentaje, v_resumen.porcentaje, p_intento_id,
+        case when v_resumen.aprobado then now() else null end, now()
+    )
+    on conflict (usuario_id, leccion_id) do update
+    set intentos = progreso_lecciones.intentos + 1,
+        completada = progreso_lecciones.completada or excluded.completada,
+        aprobada = progreso_lecciones.aprobada or excluded.aprobada,
+        mejor_porcentaje = greatest(progreso_lecciones.mejor_porcentaje, excluded.mejor_porcentaje),
+        ultimo_porcentaje = excluded.ultimo_porcentaje,
+        ultimo_intento_id = excluded.ultimo_intento_id,
+        aprobado_en = case
+            when excluded.aprobada and progreso_lecciones.aprobado_en is null then now()
+            else progreso_lecciones.aprobado_en
+        end,
+        updated_at = now();
+
+    v_xp := 0;
+    if v_resumen.aprobado and not v_ya_aprobada then
+        v_xp := 20 + v_resumen.correctas * 5;
+        update perfiles set experiencia = experiencia + v_xp, updated_at = now()
+        where id = v_usuario;
+        update intentos set xp_ganado = v_xp where id = p_intento_id;
+    else
+        select i.xp_ganado into v_xp from intentos i where i.id = p_intento_id;
+    end if;
+
+    return query
+    select v_resumen.porcentaje, v_resumen.correctas, v_resumen.incorrectas,
+           v_resumen.total, v_resumen.completado, v_resumen.aprobado, v_xp;
+end;
+$$;
+
+create or replace function obtener_progreso()
+returns table (
+    leccion_id uuid,
+    completada boolean,
+    aprobada boolean,
+    intentos integer,
+    mejor_porcentaje numeric,
+    ultimo_porcentaje numeric,
+    ultimo_intento_id uuid,
+    aprobado_en timestamptz,
+    updated_at timestamptz
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+    select p.leccion_id, p.completada, p.aprobada, p.intentos,
+           p.mejor_porcentaje, p.ultimo_porcentaje, p.ultimo_intento_id,
+           p.aprobado_en, p.updated_at
+    from progreso_lecciones p
+    where p.usuario_id = auth.uid()
+    order by p.updated_at desc;
+$$;
+
 revoke all on function comprobar_respuesta(uuid, uuid) from public;
 grant execute on function comprobar_respuesta(uuid, uuid) to anon, authenticated;
+
+revoke all on function iniciar_intento(uuid, uuid) from public;
+grant execute on function iniciar_intento(uuid, uuid) to authenticated;
+
+revoke all on function registrar_respuesta(uuid, uuid, uuid) from public;
+grant execute on function registrar_respuesta(uuid, uuid, uuid) to authenticated;
+
+revoke all on function finalizar_intento(uuid) from public;
+grant execute on function finalizar_intento(uuid) to authenticated;
+
+revoke all on function obtener_progreso() from public;
+grant execute on function obtener_progreso() to authenticated;
+
+revoke all on function cantidad_preguntas_publicadas(uuid) from public;
+grant execute on function cantidad_preguntas_publicadas(uuid) to anon, authenticated;
+
+revoke all on function es_leccion_publicada(uuid) from public;
+grant execute on function es_leccion_publicada(uuid) to anon, authenticated;
+
+revoke all on function recalcular_intento(uuid) from public;
+
+-- ---------------------------------------------------------------------------
+-- Migracion de progreso persistente
+-- Necesaria en bases donde intentos / progreso_lecciones ya existen:
+-- "create table if not exists" no agrega columnas a tablas previas.
+-- Es idempotente: se puede ejecutar mas de una vez sin efectos.
+-- ---------------------------------------------------------------------------
+
+do $$
+begin
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'intentos' and column_name = 'clave_idempotencia'
+    ) then
+        alter table intentos add column clave_idempotencia uuid;
+        update intentos set clave_idempotencia = gen_random_uuid()
+        where clave_idempotencia is null;
+        alter table intentos alter column clave_idempotencia set not null;
+    end if;
+
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'intentos' and column_name = 'estado'
+    ) then
+        alter table intentos add column estado varchar(20) not null default 'en_curso';
+    end if;
+
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'intentos' and column_name = 'iniciado_at'
+    ) then
+        alter table intentos add column iniciado_at timestamptz not null default now();
+    end if;
+
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'intentos' and column_name = 'finalizado_at'
+    ) then
+        alter table intentos add column finalizado_at timestamptz;
+    end if;
+
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'intentos' and column_name = 'xp_ganado'
+    ) then
+        alter table intentos add column xp_ganado integer not null default 0;
+    end if;
+
+    -- Solo se cierran intentos que ya estaban marcados como completados.
+-- Los intentos que sigan "en_curso" se respetan para no invalidar
+-- partidas que todavia esteen en curso.
+update intentos
+    set estado = 'completado',
+        finalizado_at = coalesce(finalizado_at, created_at, now())
+    where estado = 'en_curso' and completado;
+
+    if not exists (
+        select 1 from pg_constraint where conname = 'intentos_clave_unica'
+    ) then
+        alter table intentos
+        add constraint intentos_clave_unica unique (usuario_id, clave_idempotencia);
+    end if;
+
+    if not exists (
+        select 1 from pg_constraint where conname = 'intentos_estado_check'
+    ) then
+        alter table intentos
+        add constraint intentos_estado_check check (estado in ('en_curso', 'completado', 'abandonado'));
+    end if;
+
+    if not exists (
+        select 1 from pg_constraint where conname = 'intentos_cerrado_check'
+    ) then
+        alter table intentos
+        add constraint intentos_cerrado_check check (
+            (estado = 'en_curso' and finalizado_at is null)
+            or (estado <> 'en_curso' and finalizado_at is not null)
+        );
+    end if;
+
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'progreso_lecciones' and column_name = 'ultimo_porcentaje'
+    ) then
+        alter table progreso_lecciones add column ultimo_porcentaje numeric(5,2) not null default 0;
+    end if;
+
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'progreso_lecciones' and column_name = 'ultimo_intento_id'
+    ) then
+        alter table progreso_lecciones add column ultimo_intento_id uuid;
+    end if;
+
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'progreso_lecciones' and column_name = 'aprobado_en'
+    ) then
+        alter table progreso_lecciones add column aprobado_en timestamptz;
+    end if;
+
+    update progreso_lecciones
+    set ultimo_porcentaje = mejor_porcentaje,
+        aprobado_en = coalesce(aprobado_en, case when aprobada then updated_at else null end)
+    where mejor_porcentaje > 0 and ultimo_porcentaje = 0;
+end;
+$$;
+
+create index if not exists intentos_usuario_leccion_idx on intentos (usuario_id, leccion_id, created_at desc);
+create index if not exists intentos_clave_idx on intentos (usuario_id, clave_idempotencia);
+create index if not exists progreso_lecciones_usuario_idx on progreso_lecciones (usuario_id, updated_at desc);
+create index if not exists respuestas_intento_intento_idx on respuestas_intento (intento_id);
 
 insert into cursos (
     id, nombre, descripcion, lema, monograma, logo, color_acento, orden, estado_publicacion

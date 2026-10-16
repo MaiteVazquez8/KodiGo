@@ -7,8 +7,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint src --ext .vue,.js,.jsx,.cjs,.mjs --fix",
+    "lint": "eslint src scripts --ext .vue,.js,.jsx,.cjs,.mjs --fix",
     "format": "prettier --write src/",
+    "test": "node --test scripts/pruebas-progreso.mjs",
+    "sql:validar": "node scripts/validar-sql.mjs",
     "cap:sync": "npx cap sync"
   },
   "dependencies": {

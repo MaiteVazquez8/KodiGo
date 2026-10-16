@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue'
 import { supabase } from '@/supabase'
+import { cargarProgreso } from '@/services/catalogo'
 
 const URL_RESTABLECER = import.meta.env.VITE_SUPABASE_REDIRECT_URL
 
@@ -133,6 +134,14 @@ function registrarSuscripcion() {
 async function aplicarUsuario(usuario) {
   estado.usuario = usuario
   await cargarPerfil(usuario.id)
+  // El progreso vive en Supabase: se descarga al recuperar la sesion para que
+  // las clases approved, bloqueadas y el perfil reflejen lo real.
+  try {
+    await cargarProgreso()
+  } catch {
+    // Si el progreso no se puede leer, las pantallas muestran el estado
+    // vacio en lugar de romper la navegacion.
+  }
 }
 
 async function cargarPerfil(usuarioId) {

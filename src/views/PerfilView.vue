@@ -42,10 +42,18 @@
             <p class="perfil-stat-etiqueta">RACHA DE DÍAS</p>
             <p class="perfil-stat-valor">{{ perfil?.racha_dias ?? 0 }} Días Seguidos</p>
           </div>
-          <div class="perfil-stat">
-            <p class="perfil-stat-etiqueta">CURSOS ACTIVOS</p>
-            <p class="perfil-stat-valor">{{ cursosActivos }}</p>
-          </div>
+<div class="perfil-stat">
+        <p class="perfil-stat-etiqueta">CURSOS ACTIVOS</p>
+        <p class="perfil-stat-valor">{{ cursosActivos }}</p>
+      </div>
+      <div class="perfil-stat">
+        <p class="perfil-stat-etiqueta">CLASES APROBADAS</p>
+        <p class="perfil-stat-valor">{{ resumen.aprobadas }}</p>
+      </div>
+      <div class="perfil-stat">
+        <p class="perfil-stat-etiqueta">INTENTOS REALIZADOS</p>
+        <p class="perfil-stat-valor">{{ resumen.intentos }}</p>
+      </div>
         </section>
 
         <section v-if="esInvitadoActual" class="perfil-logros">
@@ -90,7 +98,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
-import { obtenerCursos } from '@/services/catalogo'
+import { obtenerCursos, obtenerResumenProgreso } from '@/services/catalogo'
 import { esInvitado, usarAuth } from '@/services/auth'
 
 const { estado } = usarAuth()
@@ -100,6 +108,10 @@ const perfil = computed(() => estado.perfil)
 
 const cursos = ref([])
 const logros = ref([])
+
+// Lecciones aprobadas e intentos: salen del progreso guardado en Supabase,
+// asi que se mantienen al recargar o entrar desde otro dispositivo.
+const resumen = computed(() => obtenerResumenProgreso())
 
 const nombreVisible = computed(() => {
   const visible = perfil.value?.nombre_visible || ''
