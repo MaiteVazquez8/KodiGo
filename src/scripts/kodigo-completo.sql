@@ -352,12 +352,10 @@ for select
 to authenticated
 using (id = auth.uid());
 
+-- perfiles NO se lee entero entre usuarios. Cada quien ve su fila completa y
+-- para el ranking se usa la vista perfiles_publicos, que expone solo los
+-- campos que la interfaz muestra de otras personas.
 drop policy if exists "perfiles para ranking" on perfiles;
-create policy "perfiles para ranking"
-on perfiles
-for select
-to authenticated
-using (true);
 
 drop policy if exists "usuario modifica su perfil" on perfiles;
 create policy "usuario modifica su perfil"
@@ -366,6 +364,21 @@ for update
 to authenticated
 using (id = auth.uid())
 with check (id = auth.uid());
+
+drop view if exists perfiles_publicos;
+create view perfiles_publicos
+with (security_invoker = off)
+as
+    select id,
+           nombre_usuario,
+           avatar_url,
+           nivel,
+           experiencia,
+           racha_dias
+    from perfiles;
+
+grant select on perfiles_publicos to authenticated;
+revoke all on perfiles_publicos from anon;
 
 drop policy if exists "progreso propio visible" on progreso_lecciones;
 create policy "progreso propio visible"
@@ -471,6 +484,9 @@ as $$
       and estado_publicacion = 'publicado';
 $$;
 
+-- Solo una lección 'publicado' se puede practicar. 'bloqueada' sigue siendo
+-- visible para listar el contenido, pero el servidor no acepta intentar
+-- resolverla: asi el desbloqueo no depende solo de la interfaz.
 create function es_leccion_publicada(p_leccion_id uuid)
 returns boolean
 language sql
@@ -482,7 +498,7 @@ as $$
         select 1
         from lecciones
         where id = p_leccion_id
-          and estado_publicacion in ('publicado', 'bloqueada')
+          and estado_publicacion = 'publicado'
     );
 $$;
 
@@ -769,8 +785,16 @@ begin
     v_xp := 0;
     if v_resumen.aprobado and not v_ya_aprobada then
         v_xp := 20 + v_resumen.correctas * 5;
+        -- El perfil lo crea el trigger al crearse el usuario. Si todavia no
+        -- existe se corta la operacion: es preferible fallar y reintentar
+        -- que perder la respuesta o el XP en silencio.
         update perfiles set experiencia = experiencia + v_xp, updated_at = now()
         where id = v_usuario;
+
+        if not found then
+            raise exception 'El perfil del usuario todavia no esta disponible';
+        end if;
+
         update intentos set xp_ganado = v_xp where id = p_intento_id;
     else
         select i.xp_ganado into v_xp from intentos i where i.id = p_intento_id;

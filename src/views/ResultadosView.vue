@@ -134,13 +134,10 @@ import {
   rutaResultados,
   rutaUnidad,
 } from '@/services/catalogo'
-import { estado as estadoAuth } from '@/services/auth'
+import { estado as estadoAuth, refrescarPerfil } from '@/services/auth'
 
 const route = useRoute()
 const router = useRouter()
-
-const XP_POR_LECCION = 20
-const XP_POR_CORRECTA = 5
 
 const estado = ref('cargando')
 const mensajeError = ref('')
@@ -156,11 +153,10 @@ const tituloUnidad = computed(() => unidad.value?.nombre ?? '')
 const numeroUnidad = computed(() => unidad.value?.orden ?? 1)
 const rachaDias = computed(() => estadoAuth.perfil?.racha_dias ?? 0)
 
-// Recompensa: base de la clase + extra por cada respuesta correcta.
-const xpGanado = computed(() => {
-  if (!resultados.value?.aprobada) return 0
-  return XP_POR_LECCION + resultados.value.correctas * XP_POR_CORRECTA
-})
+// El XP es el que confirmo el servidor al cerrar el intento. Calcularlo aca
+// mostraria una cifra que el servidor podria no haber otorgado (por ejemplo
+// si la leccion ya estaba aprobada y no correspondia repetir la recompensa).
+const xpGanado = computed(() => Number(resultados.value?.xpGanado ?? 0))
 
 const clasesTotales = computed(
   () => leccionesUnidad.value.filter((l) => l.estado !== 'bloqueada').length,
@@ -239,6 +235,9 @@ async function cargar() {
     const intentoId = obtenerIntentoActivo(dataLeccion.id)
     if (intentoId) {
       resultados.value = await finalizarIntento(intentoId)
+      // El XP quedo guardado en perfiles: se relee para que la pantalla y el
+      // perfil muestren el valor persistido y no el anterior.
+      await refrescarPerfil()
     } else {
       resultados.value = obtenerResultadosLeccion(dataLeccion.id)
     }

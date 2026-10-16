@@ -87,6 +87,7 @@ import {
   rutaPregunta,
   rutaResultados,
 } from '@/services/catalogo'
+import { estado as estadoAuth } from '@/services/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -207,15 +208,22 @@ async function cargar() {
     const intentoExistente = obtenerIntentoActivo(dataLeccion.id)
     if (intentoExistente) {
       intentoId.value = intentoExistente
+    } else if (!estadoAuth.usuario) {
+      // Sin sesion se puede practicar igual, pero no queda registrado y se
+      // avisa en pantalla. No se finge que el progreso quede guardado.
+      intentoId.value = null
+      sinSesion.value = true
     } else {
+      // Con sesion, si el intento no arranca no se degrada en silencio a una
+      // practica sin guardar: se informa el error real y se ofrece reintentar.
       try {
         const intento = await iniciarIntento(dataLeccion.id)
         intentoId.value = intento.intentoId
         sinSesion.value = false
-      } catch {
-        // Sin sesion se puede practicar igual, pero no queda registrado.
-        intentoId.value = null
-        sinSesion.value = true
+      } catch (error) {
+        mensajeError.value = `No pudimos iniciar el intento: ${error.message}`
+        estado.value = 'error'
+        return
       }
     }
 

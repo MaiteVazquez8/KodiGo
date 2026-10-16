@@ -608,8 +608,9 @@ export async function comprobarRespuesta(preguntaId, opcionId) {
 // ---------------------------------------------------------------------------
 
 export async function obtenerPerfilesPublicos() {
+  // La vista expone solo los campos publicos del ranking, no el perfil entero.
   const { data, error } = await supabase
-    .from('perfiles')
+    .from('perfiles_publicos')
     .select('id, nombre_usuario, nivel')
     .order('experiencia', { ascending: false })
     .limit(50)
@@ -625,7 +626,7 @@ export async function obtenerPerfilesPublicos() {
 
 export async function obtenerRanking() {
   const { data, error } = await supabase
-    .from('perfiles')
+    .from('perfiles_publicos')
     .select('id, nombre_usuario, nivel, experiencia, racha_dias')
     .order('experiencia', { ascending: false })
     .limit(20)

@@ -9,7 +9,8 @@
     "build": "vite build",
     "lint": "eslint src scripts --ext .vue,.js,.jsx,.cjs,.mjs --fix",
     "format": "prettier --write src/",
-    "test": "node --test scripts/pruebas-progreso.mjs",
+    "test": "node --test scripts/pruebas-progreso.mjs scripts/pruebas-acceso-invitado.mjs",
+    "test:invitados": "node scripts/prueba-invitados.mjs",
     "sql:validar": "node scripts/validar-sql.mjs",
     "cap:sync": "npx cap sync"
   },

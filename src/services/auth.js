@@ -144,19 +144,49 @@ async function aplicarUsuario(usuario) {
   }
 }
 
-async function cargarPerfil(usuarioId) {
-  try {
-    const { data, error } = await supabase
-      .from('perfiles')
-      .select(
-        'id, nombre_usuario, nombre_visible, avatar_url, nivel, experiencia, racha_dias, racha_respuestas, created_at',
-      )
-      .eq('id', usuarioId)
-      .maybeSingle()
-    estado.perfil = error ? null : data
-  } catch {
-    estado.perfil = null
+const CAMPOS_PERFIL =
+  'id, nombre_usuario, nombre_visible, avatar_url, nivel, experiencia, racha_dias, racha_respuestas, created_at'
+
+const espera = (ms) => new Promise((resolver) => setTimeout(resolver, ms))
+
+async function leerPerfil(usuarioId) {
+  const { data, error } = await supabase
+    .from('perfiles')
+    .select(CAMPOS_PERFIL)
+    .eq('id', usuarioId)
+    .maybeSingle()
+  if (error) return null
+  return data ?? null
+}
+
+/**
+ * El perfil lo crea el trigger handle_new_user al crearse el usuario, y esa
+ * insercion no es instantanea. Cuando el usuario recien creado todavia no
+ * tiene fila, se reintenta unas veces antes de dar por perdido el perfil: de
+ * eso depende que se vea el XP y que se pueda actualizar el alias.
+ */
+async function cargarPerfil(usuarioId, intentos = 5) {
+  for (let intento = 1; intento <= intentos; intento += 1) {
+    try {
+      const perfil = await leerPerfil(usuarioId)
+      if (perfil) {
+        estado.perfil = perfil
+        return perfil
+      }
+    } catch {
+      estado.perfil = null
+      return null
+    }
+    if (intento < intentos) await espera(intento * 120)
   }
+  estado.perfil = null
+  return null
+}
+
+/** Vuelve a leer el perfil propio, por ejemplo despues de ganar XP. */
+export async function refrescarPerfil() {
+  if (!estado.usuario) return null
+  return cargarPerfil(estado.usuario.id, 2)
 }
 
 async function refrescarSesion() {
