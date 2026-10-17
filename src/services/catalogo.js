@@ -1,4 +1,4 @@
-import { supabase } from '@/supabase'
+﻿import { supabase } from '@/supabase'
 
 // ---------------------------------------------------------------------------
 // Progreso persistente
@@ -17,7 +17,15 @@ const leccionDeIntento = new Map()
 
 const PREFIJO_CLAVE_INTENTO = 'kodigo.intento.'
 
-export const CORRECTAS_MINIMAS_PARA_APROBAR = 2
+export const FRACCION_MINIMA_PARA_APROBAR = 2 / 3
+
+// CORRECTAS_MINIMAS_PARA_APROBAR ya no basta: la regla general es un 2/3 de
+// las preguntas correctas, con redondeo hacia arriba (3 -> 2, 4 -> 3,
+// 5 -> 4, 7 -> 5). Espeja lo mismo que recalcular_intento en el servidor.
+function aprobacionValida(correctas, total) {
+  if (!total) return false
+  return correctas >= Math.ceil(total * FRACCION_MINIMA_PARA_APROBAR)
+}
 
 function generarUuid() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -113,7 +121,7 @@ export async function cargarProgreso() {
       )
       .in('id', idsIntentos)
 
-    if (errorUltimos) throw crearError('No se pudieron cargar los últimos intentos.', errorUltimos)
+    if (errorUltimos) throw crearError('No se pudieron cargar los Ãºltimos intentos.', errorUltimos)
     for (const fila of ultimos ?? []) {
       resumenPorLeccion.set(fila.leccion_id, mapearResumen(fila))
     }
@@ -132,7 +140,7 @@ export function obtenerIntentoLeccion(leccionId) {
  * nuevo ni duplica respuestas.
  */
 export async function iniciarIntento(leccionId) {
-  if (!leccionId) throw crearError('Falta la lección para iniciar el intento.')
+  if (!leccionId) throw crearError('Falta la lecciÃ³n para iniciar el intento.')
 
   const { data, error } = await supabase.rpc('iniciar_intento', {
     p_leccion_id: leccionId,
@@ -157,15 +165,24 @@ export function obtenerIntentoActivo(leccionId) {
 /**
  * Registra la respuesta de una pregunta. El servidor corrige contra
  * soluciones, guarda la respuesta y devuelve el estado recalculado, asi que
- * el cliente nunca decide si acertó.
+ * el cliente nunca decide si acerto.
+ *
+ * `respuesta` depende del tipo de actividad:
+ *   seleccion / verdadero_falso: { opcion_id }
+ *   completar_texto:    { valor: "..." }
+ *   completar_codigo:   { blancos: { b1: "...", ... } }
+ *   ordenar:            { orden: ["<id elemento>", ...] }
+ *   relacionar:         { pares: [{ id_a, id_b }, ...] }
  */
-export async function registrarRespuesta(intentoId, preguntaId, opcionId) {
+export async function registrarRespuesta(intentoId, preguntaId, respuesta) {
   if (!intentoId) throw crearError('No hay un intento activo.')
+
+  const cuerpo = normalizarRespuestaCliente(respuesta)
 
   const { data, error } = await supabase.rpc('registrar_respuesta', {
     p_intento_id: intentoId,
     p_pregunta_id: preguntaId,
-    p_opcion_id: opcionId,
+    p_respuesta: cuerpo,
   })
 
   if (error) throw crearError('No se pudo registrar la respuesta.', error)
@@ -181,7 +198,7 @@ export async function registrarRespuesta(intentoId, preguntaId, opcionId) {
   }
 
   if (leccionId) {
-    resumenPorLeccion.set(leccionId, { ...resumen, aprobada: Number(fila.correctas ?? 0) >= CORRECTAS_MINIMAS_PARA_APROBAR && Boolean(fila.completado) })
+    resumenPorLeccion.set(leccionId, { ...resumen, aprobada: aprobacionValida(Number(fila.correctas ?? 0), Number(fila.total ?? 0)) && Boolean(fila.completado) })
   }
 
   return {
@@ -267,7 +284,7 @@ export async function obtenerHistorialLeccion(leccionId) {
     .eq('leccion_id', leccionId)
     .order('iniciado_at', { ascending: false })
 
-  if (error) throw crearError('No se pudo cargar el historial de la lección.', error)
+  if (error) throw crearError('No se pudo cargar el historial de la lecciÃ³n.', error)
   return (data ?? []).map((fila) => ({
     id: fila.id,
     estado: fila.estado,
@@ -355,6 +372,8 @@ function mapearPregunta(fila, opciones) {
     enunciado: fila.enunciado,
     orden: fila.orden,
     opciones,
+    tipo: fila.tipo || 'seleccion',
+    datos: fila.datos || null,
   }
 }
 
@@ -518,7 +537,7 @@ export async function obtenerLeccion(leccionId) {
     .eq('estado_publicacion', 'publicado')
     .maybeSingle()
 
-  if (error) throw crearError('No se pudo cargar la lección.', error)
+  if (error) throw crearError('No se pudo cargar la lecciÃ³n.', error)
 
   if (!data) return null
 
@@ -583,13 +602,21 @@ export async function obtenerPreguntaPorId(preguntaId) {
   return data ? { id: data.id, leccionId: data.leccion_id } : null
 }
 
-// Comprueba la respuesta en el servidor mediante la función comprobar_respuesta.
-// Devuelve { correcta, explicacion } y NO expone la solución correcta al cliente.
-export async function comprobarRespuesta(preguntaId, opcionId) {
-  const { data, error } = await supabase.rpc('comprobar_respuesta', {
-    p_pregunta_id: preguntaId,
-    p_opcion_id: opcionId,
-  })
+// Comprueba la respuesta en el servidor mediante la funcion comprobar_respuesta.
+// Devuelve { correcta, explicacion } y NO expone la solucion correcta al cliente.
+// Acepta el mismo cuerpo por tipo que registrarRespuesta; el id de opcion sigue
+// siendo la seÃ±al para la version legacy (actividad de seleccion sin intento).
+export async function comprobarRespuesta(preguntaId, respuesta) {
+  const cuerpo = normalizarRespuestaCliente(respuesta)
+  const esOpcion =
+    typeof cuerpo === 'object' && !Array.isArray(cuerpo) && typeof cuerpo.opcion_id === 'string'
+
+  const { data, error } = await supabase.rpc(
+    'comprobar_respuesta',
+    esOpcion
+      ? { p_pregunta_id: preguntaId, p_opcion_id: cuerpo.opcion_id }
+      : { p_pregunta_id: preguntaId, p_respuesta: cuerpo },
+  )
 
   if (error) throw crearError('No se pudo comprobar la respuesta.', error)
 
@@ -601,8 +628,15 @@ export async function comprobarRespuesta(preguntaId, opcionId) {
   }
 }
 
+// Normaliza la respuesta que manda el componente: historica de seleccion un
+// string puro con el id de la opcion; el resto de los tipos ya manda objeto.
+function normalizarRespuestaCliente(respuesta) {
+  if (typeof respuesta === 'string') return { opcion_id: respuesta }
+  return respuesta ?? {}
+}
+
 // ---------------------------------------------------------------------------
-// Perfiles públicos (Liga de Honor / Buscar amigos)
+// Perfiles pÃºblicos (Liga de Honor / Buscar amigos)
 // Solo se piden los campos que el mock muestra de otros usuarios. El correo
 // nunca vive en perfiles, asi que no hay dato privado en este select.
 // ---------------------------------------------------------------------------
@@ -682,7 +716,7 @@ export async function resolverLeccion(unidad, ref) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers de navegación
+// Helpers de navegaciÃ³n
 // ---------------------------------------------------------------------------
 
 export function rutaUnidad(unidad, curso) {

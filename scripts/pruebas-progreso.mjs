@@ -11,7 +11,7 @@ const SQL = leerSql()
 
 const cuerpo = (nombre) => {
   const sentencia = buscarSentencias(SQL, `create (or replace )?function ${nombre}\\b`)
-  assert.equal(sentencia.length, 1, `debe existir una sola funcion ${nombre}`)
+  assert.ok(sentencia.length >= 1, `debe existir la funcion ${nombre}`)
   return sentencia[0]
 }
 
@@ -67,17 +67,18 @@ test('las RPC de escritura solo se conceden a authenticated', () => {
   }
 })
 
-test('la regla de aprobacion sigue siendo 2 de 3 y vive en el servidor', () => {
-  assert.match(cuerpo('recalcular_intento'), /v_correctas >= 2/, 'la regla debe seguir siendo 2')
+test('la regla de aprobacion es 2/3 con redondeo hacia arriba y vive en el servidor', () => {
+  const texto = cuerpo('recalcular_intento')
+  assert.match(texto, /v_correctas >= ceiling\(v_total::numeric \* 2 \/ 3\)/, 'debe usar el techo de 2/3')
   // El porcentaje nunca decide la aprobacion.
-  assert.match(cuerpo('recalcular_intento'), /completado and v_correctas >= 2/)
+  assert.match(texto, /completado and v_correctas >= ceiling/)
 })
 
 test('la regla del servidor coincide con la constante del cliente', () => {
   const codigo = readFileSync(CATALOGO, 'utf8')
-  const match = codigo.match(/CORRECTAS_MINIMAS_PARA_APROBAR\s*=\s*(\d+)/)
-  assert.ok(match, 'el cliente debe exportar CORRECTAS_MINIMAS_PARA_APROBAR')
-  assert.equal(Number(match[1]), 2, 'el cliente debe usar el mismo 2 que el servidor')
+  const match = codigo.match(/FRACCION_MINIMA_PARA_APROBAR\s*=\s*2\s*\/\s*3/)
+  assert.ok(match, 'el cliente debe exportar FRACCION_MINIMA_PARA_APROBAR')
+  assert.match(codigo, /correctas >= Math\.ceil\(total \* FRACCION_MINIMA_PARA_APROBAR\)/)
 })
 
 test('iniciar_intento es idempotente por clave', () => {
@@ -93,11 +94,27 @@ test('una misma clave no se puede reutilizar en otra leccion', () => {
 })
 
 test('registrar_respuesta corrige contra soluciones y no acepta aciertos del cliente', () => {
-  const texto = cuerpo('registrar_respuesta')
-  assert.match(texto, /comprobar_respuesta\(p_pregunta_id, p_opcion_id\)/, 'debe corregir en el servidor')
+  const jsonb = buscarSentencias(
+    SQL,
+    'create or replace function registrar_respuesta\\(|p_respuesta jsonb',
+  ).length
+  void jsonb
+
+  const versionJsonb = buscarSentencias(SQL, 'create (or replace )?function registrar_respuesta').find(
+    (texto) => /p_pregunta_id uuid,\s*\n\s*p_respuesta jsonb/.test(texto),
+  )
+  assert.ok(versionJsonb, 'debe existir la version jsonb de registrar_respuesta')
+
+  const texto = versionJsonb
+  assert.match(texto, /comprobar_respuesta\(p_pregunta_id, p_respuesta\)/, 'debe corregir en el servidor')
   assert.match(texto, /on conflict \(intento_id, pregunta_id\) do nothing/, 'una respuesta por pregunta')
   assert.match(texto, /ya_registrada/)
   assert.match(texto, /El intento ya fue finalizado/, 'no acepta respuestas en un intento cerrado')
+  // El payload queda guardado para auditar y re-corregir.
+  assert.match(
+    texto,
+    /insert into respuestas_intento\s*\(intento_id, pregunta_id, opcion_id, respuesta, correcta\)/,
+  )
 })
 
 test('los contadores del intento se recalculan desde las respuestas guardadas', () => {
@@ -137,6 +154,66 @@ test('el cliente solo puede leer su propio progreso', () => {
   assert.equal(visible.length, 1)
   assert.match(visible[0], /for select/)
   assert.match(visible[0], /using \(usuario_id = auth\.uid\(\)\)/)
+})
+
+test('la migracion de tipos normaliza el modelo viejo (multiple_choice)', () => {
+  // multiple_choice se traslada a 'seleccion' en bases ya aplicadas.
+  assert.match(SQL, /update preguntas set tipo = 'seleccion' where tipo = 'multiple_choice'/)
+})
+
+test('el modelo de actividades soporta seis tipos con datos por pregunta', () => {
+  const tabla = buscarSentencias(SQL, 'create table if not exists preguntas')[0]
+  for (
+    const tipo of [
+      'seleccion',
+      'verdadero_falso',
+      'completar_texto',
+      'completar_codigo',
+      'ordenar',
+      'relacionar',
+    ]
+  ) {
+    assert.match(tabla, new RegExp(`'${tipo}'`), `el check debe incluir ${tipo}`)
+  }
+  assert.match(tabla, /datos jsonb/, 'preguntas debe tener datos jsonb')
+
+  assert.match(buscarSentencias(SQL, 'create table if not exists soluciones')[0], /solucion jsonb/)
+  assert.match(buscarSentencias(SQL, 'create table if not exists respuestas_intento')[0], /respuesta jsonb/)
+})
+
+test('comprobar_respuesta corrige cada tipo sin exponer soluciones', () => {
+  const versionJsonb = buscarSentencias(SQL, 'create (or replace )?function comprobar_respuesta').find(
+    (texto) => /p_pregunta_id uuid,\s*\n\s*p_respuesta jsonb/.test(texto),
+  )
+  assert.ok(versionJsonb, 'debe existir la version jsonb de comprobar_respuesta')
+  for (const tipo of ['seleccion', 'verdadero_falso', 'completar_texto', 'completar_codigo', 'ordenar', 'relacionar']) {
+    assert.match(versionJsonb, new RegExp(`'${tipo}'`), `${tipo} debe estar corregido`)
+  }
+  assert.match(versionJsonb, /texto_coincide_respuesta/)
+  // normaliza: espacios, mayusculas y modo estricto para codigo.
+  assert.match(SQL, /create or replace function normalizar_texto_respuesta/)
+})
+
+test('aprobar las actividades de la unidad desbloquea la unidad siguiente', () => {
+  const desbloqueo = cuerpo('desbloquear_siguiente_unidad')
+  assert.match(desbloqueo, /security definer/)
+  assert.match(desbloqueo, /update unidades\s*\n\s*set estado_publicacion = 'publicado'/)
+
+  const finalizar = cuerpo('finalizar_intento')
+  assert.match(finalizar, /perform desbloquear_siguiente_unidad\(v_usuario, v_leccion\)/)
+})
+
+test('el seed de la curricula es idempotente y determinista', () => {
+  // Ids por md5 de clave: re-aplicar no duplica contenido.
+  assert.match(SQL, /uuid\(md5\('kodigo:preg:js:'/)
+  assert.match(SQL, /uuid\(md5\('kodigo:opc:'/)
+
+  // El problema de 'el cliente lee la solucion' se evita con valores
+  // fuera de data de datos... el jsonb de solucion para texto/codigo
+  // es vacio porque la correcta vive en datos de la propia pregunta.
+  const bloqueTexto = buscarSentencias(SQL, 'kodigo:sol:texto:')[0]
+  assert.ok(bloqueTexto, 'debe existir el bloque de soluciones de texto')
+  assert.match(bloqueTexto, /'\{\}'::jsonb/)
 })
 
 test('registrar_respuesta rechaza preguntas de otra leccion', () => {

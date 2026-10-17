@@ -15,7 +15,7 @@ const actividad = leer('src', 'views', 'ActividadView.vue')
 const auth = leer('src', 'services', 'auth.js')
 
 test('una leccion bloqueada no se puede intentar desde el servidor', () => {
-  const fn = buscarSentencias(SQL, 'create function es_leccion_publicada')
+  const fn = buscarSentencias(SQL, 'create (or replace )?function es_leccion_publicada')
   assert.equal(fn.length, 1)
   assert.match(fn[0], /estado_publicacion = 'publicado'/)
   // 'bloqueada' puede quedar visible para listar, pero no se puede practicar.

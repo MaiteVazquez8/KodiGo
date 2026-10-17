@@ -55,6 +55,7 @@
           :pregunta="preguntaActual"
           :corrigiendo="corrigiendo"
           :devolucion="devolucion"
+          :semilla="semillaMezcla"
           class="activity-runner-wrap"
           @comprobar="manejarComprobar"
           @siguiente="siguiente"
@@ -103,6 +104,18 @@ const corrigiendo = ref(false)
 const devolucion = ref(null)
 const intentoId = ref(null)
 const sinSesion = ref(false)
+
+// Semilla estable para mezclar opciones/elementos: con intento abierto muere
+// en el id del intento (recargar conserva el orden); sin sesion se apoya en un
+// token de dispositivo para que no cambie en la misma pasada.
+const semillaAnonima = ref('')
+
+const semillaMezcla = computed(() => {
+  const base = intentoId.value
+    ? intentoId.value
+    : `anon-${semillaAnonima.value || 'sin-dispositivo'}`
+  return `${base}-${leccion.value?.id ?? ''}`
+})
 
 const preguntaActual = computed(() => preguntas.value[indice.value] ?? null)
 
@@ -200,6 +213,21 @@ async function cargar() {
       return
     }
 
+    // Token de mezcla para modos sin intento: se hornea por dispositivo.
+    if (!estadoAuth.usuario && typeof window !== 'undefined') {
+      if (!semillaAnonima.value) {
+        let token = window.localStorage.getItem('kodigo.semilla')
+        if (!token) {
+          token =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : String(Date.now() + Math.random())
+          window.localStorage.setItem('kodigo.semilla', token)
+        }
+        semillaAnonima.value = token
+      }
+    }
+
     indice.value = Math.min(Math.max(indiceInicial, 0), dataPreguntas.length - 1)
     devolucion.value = null
 
@@ -250,8 +278,8 @@ watch(
   },
 )
 
-async function manejarComprobar(opcionId) {
-  if (corrigiendo.value || !preguntaActual.value) return
+async function manejarComprobar(respuesta) {
+  if (corrigiendo.value || !preguntaActual.value || !respuesta) return
   corrigiendo.value = true
   devolucion.value = null
   const pregunta = preguntaActual.value
@@ -259,8 +287,8 @@ async function manejarComprobar(opcionId) {
     // Con intento abierto el servidor corrige, guarda y recalcula.
     // Sin sesion se cae a la comprobacion simple, que tampoco guarda nada.
     const resultado = intentoId.value
-      ? await registrarRespuesta(intentoId.value, pregunta.id, opcionId)
-      : await comprobarRespuesta(pregunta.id, opcionId)
+      ? await registrarRespuesta(intentoId.value, pregunta.id, respuesta)
+      : await comprobarRespuesta(pregunta.id, respuesta)
 
     devolucion.value = {
       estado: resultado.correcta ? 'correcta' : 'incorrecta',

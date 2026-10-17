@@ -47,7 +47,7 @@
         </div>
 
         <section class="lessons">
-          <p class="unit-bloque-titulo">Clases Disponibles</p>
+          <p class="unit-bloque-titulo">Camino de aprendizaje</p>
 
           <EstadoPantalla
             v-if="estadoLecciones === 'vacio'"
@@ -56,34 +56,12 @@
             mensaje="Las clases publicadas van a aparecer acá."
           />
 
-          <div v-else class="lessons-list">
-            <button
-              v-for="leccion in lecciones"
-              :key="leccion.id"
-              type="button"
-              class="lesson-row"
-              :class="[`is-${leccion.estado}`]"
-              :disabled="leccion.estado === 'bloqueada'"
-              @click="abrirLeccion(leccion)"
-            >
-              <span class="lesson-icon">
-                <q-icon
-                  v-if="['completada', 'aprobada'].includes(leccion.estado)"
-                  name="check"
-                  size="18px"
-                />
-                <q-icon v-else-if="leccion.estado === 'bloqueada'" name="lock" size="15px" />
-                <q-icon v-else name="play_circle_filled" size="20px" />
-              </span>
-              <span class="lesson-body">
-                <span class="lesson-title">{{ leccion.titulo }}</span>
-                <span class="lesson-meta">
-                  {{ leccion.cantidadPreguntas }} preguntas
-                  <span class="lesson-xp">• +{{ xpClase }} XP</span>
-                </span>
-              </span>
-            </button>
-          </div>
+          <CaminoUnidad
+            v-else
+            :lecciones="lecciones"
+            :mensaje="mensajeGuida"
+            @abrir="abrirLeccion"
+          />
         </section>
 
         <section class="unit-recompensa">
@@ -111,6 +89,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
+import CaminoUnidad from '@/components/CaminoUnidad.vue'
 import {
   aSlug,
   obtenerLecciones,
@@ -131,11 +110,9 @@ const unidad = ref(null)
 const curso = ref(null)
 const lecciones = ref([])
 
-const XP_POR_CLASE = 15
 const XP_POR_UNIDAD = 100
 
 const rachaDias = computed(() => estadoAuth.perfil?.racha_dias ?? 0)
-const xpClase = computed(() => XP_POR_CLASE)
 const xpUnidad = computed(() => XP_POR_UNIDAD)
 
 const hayCompletadas = computed(() =>
@@ -149,6 +126,21 @@ const objetivos = computed(() => lecciones.value.map((leccion) => leccion.titulo
 const linkCurso = computed(() =>
   curso.value ? { name: 'curso', params: { curso: aSlug(curso.value.nombre) } } : { name: 'learn' },
 )
+
+// Guia de la mascota al pie del camino: cambia segun el estado del usuario.
+const mensajeGuida = computed(() => {
+  if (unidad.value?.estado === 'bloqueada') {
+    return 'El camino esta en pausa: completá la unidad anterior para seguir avanzando.'
+  }
+  const todosVistos =
+    lecciones.value.length > 0 &&
+    lecciones.value.every((l) => l.estado === 'completada' || l.estado === 'aprobada')
+
+  if (todosVistos) {
+    return 'Terminaste el camino de esta unidad: ¡elegí una clase para repasarla cuando quieras!'
+  }
+  return 'Sigue avanzando por el camino para desbloquear tu próxima clase.'
+})
 
 const primeraDisponible = computed(
   () => lecciones.value.find((l) => l.estado !== 'bloqueada') ?? null,
@@ -338,93 +330,6 @@ function verCursos() {
 
 .lessons {
   margin-top: var(--k-space-6);
-}
-
-.lessons-list {
-  display: grid;
-  gap: var(--k-space-3);
-  margin-top: var(--k-space-4);
-}
-
-.lesson-row {
-  display: flex;
-  align-items: center;
-  gap: var(--k-space-4);
-  padding: 14px 16px;
-  border-radius: 16px;
-  border: 1px solid var(--k-line);
-  background: linear-gradient(180deg, rgba(24, 9, 31, 0.96), rgba(15, 7, 21, 0.98));
-  color: var(--k-text);
-  cursor: pointer;
-  text-align: left;
-  transition:
-    border-color 0.12s ease,
-    transform 0.08s ease,
-    box-shadow 0.12s ease;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.lesson-row:active {
-  transform: scale(0.985);
-}
-
-.lesson-row:disabled {
-  cursor: default;
-  opacity: 0.5;
-  transform: none;
-}
-
-.lesson-row.is-completada,
-.lesson-row.is-aprobada {
-  border-color: rgba(52, 211, 153, 0.35);
-}
-
-.lesson-row.is-disponible {
-  border-color: rgba(142, 5, 194, 0.55);
-}
-
-.lesson-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  flex-shrink: 0;
-  border-radius: 12px;
-  background: rgba(142, 5, 194, 0.08);
-  border: 1px solid rgba(142, 5, 194, 0.22);
-  color: var(--k-accent);
-}
-
-.lesson-row.is-completada .lesson-icon,
-.lesson-row.is-aprobada .lesson-icon {
-  color: var(--k-success);
-}
-
-.lesson-row.is-bloqueada .lesson-icon {
-  color: var(--k-text-3);
-}
-
-.lesson-body {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.lesson-title {
-  font-size: 14.5px;
-  font-weight: 700;
-}
-
-.lesson-meta {
-  font-size: 12px;
-  color: var(--k-text-3);
-}
-
-.lesson-chev {
-  color: var(--k-text-3);
-  flex-shrink: 0;
 }
 
 .unit-cta {
