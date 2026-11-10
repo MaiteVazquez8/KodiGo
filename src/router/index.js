@@ -131,6 +131,34 @@ const rutas = [
     name: 'configuracion',
     component: () => import('@/views/ConfiguracionView.vue'),
   },
+  // ------------------------------------------------------------------
+  // Desafío ExpoTécnica (etapa 7): presentación, desafío, ranking y panel.
+  // ------------------------------------------------------------------
+  {
+    // Presentación pública del evento.
+    path: '/expotecnica',
+    name: 'expotecnica',
+    component: () => import('@/views/ExpotecnicaView.vue'),
+  },
+  {
+    // El desafío exige sesión: cuenta real o invitado anónimo de Supabase.
+    path: '/expotecnica/desafio',
+    name: 'expotecnica-desafio',
+    component: () => import('@/views/ExpotecnicaDesafioView.vue'),
+  },
+  {
+    // Ranking público del evento activo.
+    path: '/expotecnica/ranking',
+    name: 'expotecnica-ranking',
+    component: () => import('@/views/ExpotecnicaRankingView.vue'),
+  },
+  {
+    // Panel administrativo: el propio panel verifica el alta en expotec_admins
+    // vía expotec_admin_es_admin() y muestra la pantalla de sin-acceso.
+    path: '/admin',
+    name: 'admin',
+    component: () => import('@/views/AdminExpotecnicaView.vue'),
+  },
   {
     path: '/:pathMatch(.*)*',
     redirect: '/',
@@ -144,7 +172,7 @@ const enrutador = createRouter({
 })
 
 const rutasAcceso = ['bienvenida', 'acceso', 'registro', 'ingreso', 'recuperar', 'restablecer']
-const rutasQueRequierenSesion = ['perfil', 'configuracion']
+const rutasQueRequierenSesion = ['perfil', 'configuracion', 'expotecnica-desafio', 'admin']
 
 enrutador.beforeEach(async (destino) => {
   // Se espera a conocer el estado real antes de redirigir: sin esto la app

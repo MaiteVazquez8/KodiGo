@@ -3135,3 +3135,3372 @@ from (values
 ) as e(clave_preg, solucion, explicacion)
 join preguntas p on p.id = uuid(md5('kodigo:preg:html:' || e.clave_preg))
 on conflict (pregunta_id) do nothing;
+
+-- ===========================================================================
+-- Etapa 7: Desafio ExpoTecnica (eventos, cuestionario competitivo, Core
+-- Defender, ranking publico y panel de administracion).
+--
+-- Contrato del sistema:
+--   * El evento es la unidad de competencia (ExpoTecnica 2026, 2027, ...).
+--     Cada evento tiene su propio desafio, sus partidas y su ranking; nunca
+--     se mezclan rankings de eventos distintos.
+--   * El desafio se congela cuando se crea la primera partida
+--     (expotec_desafios.congelado_en): mientras exista una sola partida no se
+--     puede cambiar preguntas, puntajes ni reglas. Cada partida guarda ademas
+--     una copia vigente de las reglas en config_snapshot.
+--   * Las preguntas y opciones se asignan con orden aleatorio en el servidor
+--     al crear la partida y quedan guardadas (expotec_preguntas_asignadas):
+--     recargar la pagina no cambia el cuestionario.
+--   * Todo el puntaje oficial se calcula y persiste en el servidor mediante
+--     funciones SECURITY DEFINER. Las tablas nuevas no tienen politicas de
+--     INSERT/UPDATE/DELETE: el cliente solo puede leer lo suyo y ejecutar RPC.
+--   * El alias es identificador publico con unicidad por evento a nivel de
+--     base de datos (case-insensitive). Nunca es mecanismo de autenticacion:
+--     la identidad real es auth.uid() (invitados incluidos, con la sesion
+--     anonima de Supabase de alcance limitado).
+--   * El ranking oficial con sus desempates vive en expotec_ranking() y la
+--     tabla publica minima para tiempo real es expotec_resultados_publicos.
+-- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1. Tablas del sistema de eventos
+-- ---------------------------------------------------------------------------
+
+create table if not exists expotec_eventos (
+    id uuid primary key default gen_random_uuid(),
+    nombre varchar(120) not null,
+    descripcion text,
+    fecha_inicio timestamptz,
+    fecha_fin timestamptz,
+    estado varchar(20) not null default 'borrador',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint expotec_eventos_estado_check check (estado in ('borrador', 'programado', 'activo', 'cerrado')),
+    constraint expotec_eventos_fechas_check check (
+        fecha_inicio is null or fecha_fin is null or fecha_inicio <= fecha_fin
+    )
+);
+
+create table if not exists expotec_desafios (
+    id uuid primary key default gen_random_uuid(),
+    evento_id uuid not null unique references expotec_eventos(id) on delete cascade,
+    nombre varchar(120) not null,
+    version integer not null default 1,
+    cantidad_preguntas integer not null default 10,
+    puntos_por_correcta integer not null default 100,
+    tiempo_cuestionario_seg integer,
+    duracion_juego_seg integer not null default 180,
+    vidas_juego integer not null default 3,
+    intentos_permitidos integer not null default 1,
+    mostrar_soluciones boolean not null default true,
+    congelado_en timestamptz,
+    created_at timestamptz not null default now(),
+    constraint expotec_desafios_cantidad_check check (cantidad_preguntas between 1 and 50),
+    constraint expotec_desafios_puntos_check check (puntos_por_correcta >= 0),
+    constraint expotec_desafios_tiempo_check check (tiempo_cuestionario_seg is null or tiempo_cuestionario_seg between 30 and 7200),
+    constraint expotec_desafios_duracion_check check (duracion_juego_seg between 20 and 900),
+    constraint expotec_desafios_vidas_check check (vidas_juego between 1 and 10),
+    constraint expotec_desafios_intentos_check check (intentos_permitidos between 1 and 20)
+);
+
+-- Preguntas seleccionadas para el desafio. La FK a preguntas es restrict:
+-- una pregunta usada en un desafio no se puede borrar, solo despublicar.
+create table if not exists expotec_desafio_preguntas (
+    id uuid primary key default gen_random_uuid(),
+    desafio_id uuid not null references expotec_desafios(id) on delete cascade,
+    pregunta_id uuid not null references preguntas(id) on delete restrict,
+    orden integer not null default 0,
+    constraint expotec_desafio_preguntas_orden_check check (orden >= 0),
+    constraint expotec_desafio_preguntas_unica unique (desafio_id, pregunta_id),
+    constraint expotec_desafio_preguntas_posicion_unique unique (desafio_id, orden)
+);
+
+create table if not exists expotec_participantes (
+    id uuid primary key default gen_random_uuid(),
+    evento_id uuid not null references expotec_eventos(id) on delete cascade,
+    usuario_id uuid not null references perfiles(id) on delete cascade,
+    alias varchar(40) not null,
+    alias_normalizado varchar(40) not null,
+    created_at timestamptz not null default now(),
+    constraint expotec_participantes_evento_alias_unique unique (evento_id, alias_normalizado)
+);
+create index if not exists expotec_participantes_evento_idx on expotec_participantes (evento_id);
+create index if not exists expotec_participantes_usuario_idx on expotec_participantes (usuario_id);
+
+create table if not exists expotec_partidas (
+    id uuid primary key default gen_random_uuid(),
+    evento_id uuid not null references expotec_eventos(id) on delete cascade,
+    desafio_id uuid not null references expotec_desafios(id) on delete cascade,
+    participante_id uuid not null references expotec_participantes(id) on delete cascade,
+    usuario_id uuid not null references perfiles(id) on delete cascade,
+    alias varchar(40) not null,
+    estado varchar(30) not null default 'creada',
+    config_snapshot jsonb not null,
+    iniciado_at timestamptz not null default now(),
+    vencimiento_at timestamptz,
+    cuestionario_completado_at timestamptz,
+    finalizado_at timestamptz,
+    tiempo_cuestionario_seg numeric(10,2),
+    correctas integer not null default 0,
+    incorrectas integer not null default 0,
+    respondidas integer not null default 0,
+    puntaje_cuestionario integer not null default 0,
+    puntaje_juego integer not null default 0,
+    puntaje_total integer generated always as (puntaje_cuestionario + puntaje_juego) stored,
+    created_at timestamptz not null default now(),
+    constraint expotec_partidas_estado_check check (estado in (
+        'creada', 'en_cuestionario', 'cuestionario_completado',
+        'en_juego', 'finalizada', 'vencida', 'abandonada'
+    )),
+    constraint expotec_partidas_cerrada_check check (
+        finalizado_at is null or estado in ('finalizada', 'vencida', 'abandonada')
+    ),
+    constraint expotec_partidas_conteos_check check (
+        correctas >= 0 and incorrectas >= 0 and respondidas >= 0
+        and puntaje_cuestionario >= 0 and puntaje_juego >= 0
+    ),
+    constraint expotec_partidas_tiempo_check check (tiempo_cuestionario_seg is null or tiempo_cuestionario_seg >= 0)
+);
+-- Un usuario no puede tener dos partidas abiertas en el mismo evento: la
+-- reconexion siempre recupera la partida existente.
+create unique index if not exists expotec_partidas_abierta_unica
+on expotec_partidas (usuario_id, evento_id)
+where estado in ('creada', 'en_cuestionario', 'cuestionario_completado', 'en_juego');
+create index if not exists expotec_partidas_evento_idx on expotec_partidas (evento_id);
+create index if not exists expotec_partidas_usuario_idx on expotec_partidas (usuario_id);
+create index if not exists expotec_partidas_estado_idx on expotec_partidas (evento_id, estado);
+
+create table if not exists expotec_preguntas_asignadas (
+    id uuid primary key default gen_random_uuid(),
+    partida_id uuid not null references expotec_partidas(id) on delete cascade,
+    pregunta_id uuid not null references preguntas(id) on delete restrict,
+    orden integer not null,
+    opciones_orden jsonb not null,
+    constraint expotec_preguntas_asignadas_posicion_unique unique (partida_id, orden),
+    constraint expotec_preguntas_asignadas_pregunta_unique unique (partida_id, pregunta_id),
+    constraint expotec_preguntas_asignadas_orden_check check (orden >= 0),
+    constraint expotec_preguntas_asignadas_opciones_check check (jsonb_typeof(opciones_orden) = 'array')
+);
+create index if not exists expotec_preguntas_asignadas_partida_idx on expotec_preguntas_asignadas (partida_id, orden);
+
+create table if not exists expotec_respuestas (
+    id uuid primary key default gen_random_uuid(),
+    partida_id uuid not null references expotec_partidas(id) on delete cascade,
+    pregunta_asignada_id uuid not null references expotec_preguntas_asignadas(id) on delete cascade,
+    pregunta_id uuid not null references preguntas(id) on delete restrict,
+    opcion_id uuid not null references opciones(id) on delete restrict,
+    correcta boolean not null,
+    puntos integer not null default 0,
+    respondido_at timestamptz not null default now(),
+    constraint expotec_respuestas_preguntas_unique unique (partida_id, pregunta_asignada_id),
+    constraint expotec_respuestas_puntos_check check (puntos >= 0)
+);
+create index if not exists expotec_respuestas_partida_idx on expotec_respuestas (partida_id);
+create index if not exists expotec_respuestas_opcion_idx on expotec_respuestas (opcion_id);
+
+create table if not exists expotec_sesiones_juego (
+    id uuid primary key default gen_random_uuid(),
+    partida_id uuid not null unique references expotec_partidas(id) on delete cascade,
+    ticket uuid not null,
+    iniciado_at timestamptz not null default now(),
+    finalizado_at timestamptz,
+    duracion_seg numeric(10,2),
+    meteoritos integer not null default 0,
+    impactos integer not null default 0,
+    checkpoints jsonb,
+    estado varchar(20) not null default 'en_curso',
+    constraint expotec_sesiones_estado_check check (estado in ('en_curso', 'cerrada')),
+    constraint expotec_sesiones_cerrada_check check (
+        (estado = 'en_curso' and finalizado_at is null)
+        or (estado = 'cerrada' and finalizado_at is not null)
+    ),
+    constraint expotec_sesiones_conteos_check check (
+        meteoritos >= 0 and impactos >= 0
+        and (duracion_seg is null or duracion_seg >= 0)
+    )
+);
+
+-- Tabla publica minima: alimenta la pantalla de ranking externa y la
+-- suscripcion Realtime. No contiene correos, identificadores privados,
+-- respuestas ni tokens. Solo inserta el servidor al finalizar una partida.
+create table if not exists expotec_resultados_publicos (
+    id uuid primary key default gen_random_uuid(),
+    partida_id uuid not null unique references expotec_partidas(id) on delete cascade,
+    evento_id uuid not null references expotec_eventos(id) on delete cascade,
+    alias varchar(40) not null,
+    alias_normalizado varchar(40) not null,
+    correctas integer not null default 0,
+    incorrectas integer not null default 0,
+    puntaje_cuestionario integer not null default 0,
+    puntaje_juego integer not null default 0,
+    puntaje_total integer not null default 0,
+    tiempo_cuestionario_seg numeric(10,2),
+    finalizado_at timestamptz not null,
+    created_at timestamptz not null default now(),
+    constraint expotec_resultados_puntaje_check check (
+        correctas >= 0 and incorrectas >= 0
+        and puntaje_cuestionario >= 0 and puntaje_juego >= 0
+        and (puntaje_total = puntaje_cuestionario + puntaje_juego)
+    )
+);
+create index if not exists expotec_resultados_evento_idx on expotec_resultados_publicos (evento_id);
+create index if not exists expotec_resultados_ranking_idx on expotec_resultados_publicos (
+    evento_id, puntaje_total desc, tiempo_cuestionario_seg asc nulls last,
+    puntaje_juego desc, finalizado_at asc
+);
+
+create table if not exists expotec_admins (
+    usuario_id uuid primary key references perfiles(id) on delete cascade,
+    created_at timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------------
+-- 2. Identidad de administrador
+--
+-- Alta de un administrador: se hace por SQL desde el dashboard de Supabase
+-- (ver docs/stage7). El cliente no puede escribir esta tabla, asi que un
+-- usuario comun no puede otorgarse el rol desde el navegador.
+-- ---------------------------------------------------------------------------
+
+create or replace function es_administrador_expotec()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select auth.uid() is not null
+       and exists (
+           select 1 from expotec_admins where usuario_id = auth.uid()
+       );
+$$;
+
+revoke all on function es_administrador_expotec() from public;
+grant execute on function es_administrador_expotec() to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 3. Validacion de alias
+-- ---------------------------------------------------------------------------
+
+-- Normaliza un alias: recorta espacios, colapsa espacios internos y pasa a
+-- minusculas. La unicidad por evento se comprueba contra este valor.
+create or replace function expotec_alias_normalizado(p_alias text)
+returns text
+language plpgsql
+immutable
+as $$
+begin
+    return regexp_replace(btrim(lower(coalesce(p_alias, ''))), '\s+', ' ', 'g');
+end;
+$$;
+
+-- Devuelve el mensaje de error, o null cuando el alias es aceptable.
+create or replace function expotec_alias_inconveniente(p_alias text)
+returns text
+language plpgsql
+immutable
+as $$
+declare
+    v text;
+begin
+    v := expotec_alias_normalizado(p_alias);
+
+    if v is null or length(v) = 0 then
+        return 'El nombre no puede estar vacio.';
+    end if;
+    if length(v) < 3 then
+        return 'El nombre debe tener al menos 3 caracteres.';
+    end if;
+    if length(v) > 20 then
+        return 'El nombre debe tener hasta 20 caracteres.';
+    end if;
+    if v !~ '^[a-z0-9áéíóúüñ. _-]+$' then
+        return 'Solo se permiten letras, numeros, espacios, puntos, guiones bajos y guiones.';
+    end if;
+    if left(v, 1) ~ '[ .-]' or right(v, 1) ~ '[ .-]' then
+        return 'El nombre no puede empezar o terminar con un simbolo o espacio.';
+    end if;
+    if v ~ '([ .-]{2,})' then
+        return 'El nombre no puede repetir simbolos o espacios seguidos.';
+    end if;
+    if v ~ '^(admin|administrador|sistema|kodigo|mod|perfil|root|staff)( .*)?$' then
+        return 'Ese nombre esta reservado. Probá otra variante.';
+    end if;
+    if v ~ '(nazi|puta|puto|mierda|idiota|imbecil|tonto|pelotudo|fuck|shit|bitch|nigg)' then
+        return 'Ese nombre no es apropiado. Elegí otro.';
+    end if;
+    return null;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 4. Reglas de activacion del evento y congelamiento
+-- ---------------------------------------------------------------------------
+
+create or replace function expotec_evento_ventana_abierta(p_evento_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select exists (
+        select 1
+        from expotec_eventos e
+        where e.id = p_evento_id
+          and e.estado = 'activo'
+          and (e.fecha_inicio is null or e.fecha_inicio <= now())
+          and (e.fecha_fin is null or now() <= e.fecha_fin)
+    );
+$$;
+
+create or replace function expotec_desafio_congelado(p_desafio_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select exists (
+        select 1
+        from expotec_desafios d
+        where d.id = p_desafio_id
+          and (
+              d.congelado_en is not null
+              or exists (select 1 from expotec_partidas p where p.desafio_id = d.id)
+          )
+    );
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 5. Seguridad: RLS y politicas
+--
+-- Las tablas nuevas solo admiten lectura. Las escrituras ocurren exclusivamente
+-- dentro de funciones SECURITY DEFINER, que corren como propietario del esquema
+-- de forma equivalente al resto del esquema de Kodigo.
+-- ---------------------------------------------------------------------------
+
+alter table expotec_eventos enable row level security;
+alter table expotec_desafios enable row level security;
+alter table expotec_desafio_preguntas enable row level security;
+alter table expotec_participantes enable row level security;
+alter table expotec_partidas enable row level security;
+alter table expotec_preguntas_asignadas enable row level security;
+alter table expotec_respuestas enable row level security;
+alter table expotec_sesiones_juego enable row level security;
+alter table expotec_resultados_publicos enable row level security;
+alter table expotec_admins enable row level security;
+
+drop policy if exists "eventos activos publicos" on expotec_eventos;
+create policy "eventos activos publicos"
+on expotec_eventos
+for select
+to anon, authenticated
+using (
+    estado = 'activo'
+    and (fecha_inicio is null or fecha_inicio <= now())
+    and (fecha_fin is null or now() <= fecha_fin)
+);
+
+drop policy if exists "eventos para administrador" on expotec_eventos;
+create policy "eventos para administrador"
+on expotec_eventos
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "desafios para administrador" on expotec_desafios;
+create policy "desafios para administrador"
+on expotec_desafios
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "preguntas del desafio para administrador" on expotec_desafio_preguntas;
+create policy "preguntas del desafio para administrador"
+on expotec_desafio_preguntas
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "participantes para administrador" on expotec_participantes;
+create policy "participantes para administrador"
+on expotec_participantes
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "partidas propias visibles" on expotec_partidas;
+create policy "partidas propias visibles"
+on expotec_partidas
+for select
+to authenticated
+using (usuario_id = auth.uid());
+
+drop policy if exists "partidas para administrador" on expotec_partidas;
+create policy "partidas para administrador"
+on expotec_partidas
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "asignaciones de partidas propias" on expotec_preguntas_asignadas;
+create policy "asignaciones de partidas propias"
+on expotec_preguntas_asignadas
+for select
+to authenticated
+using (
+    exists (
+        select 1 from expotec_partidas p
+        where p.id = expotec_preguntas_asignadas.partida_id
+          and p.usuario_id = auth.uid()
+    )
+);
+
+drop policy if exists "asignaciones para administrador" on expotec_preguntas_asignadas;
+create policy "asignaciones para administrador"
+on expotec_preguntas_asignadas
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "respuestas de partidas propias" on expotec_respuestas;
+create policy "respuestas de partidas propias"
+on expotec_respuestas
+for select
+to authenticated
+using (
+    exists (
+        select 1 from expotec_partidas p
+        where p.id = expotec_respuestas.partida_id
+          and p.usuario_id = auth.uid()
+    )
+);
+
+drop policy if exists "respuestas para administrador" on expotec_respuestas;
+create policy "respuestas para administrador"
+on expotec_respuestas
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "sesiones de juego propias" on expotec_sesiones_juego;
+create policy "sesiones de juego propias"
+on expotec_sesiones_juego
+for select
+to authenticated
+using (
+    exists (
+        select 1 from expotec_partidas p
+        where p.id = expotec_sesiones_juego.partida_id
+          and p.usuario_id = auth.uid()
+    )
+);
+
+drop policy if exists "sesiones para administrador" on expotec_sesiones_juego;
+create policy "sesiones para administrador"
+on expotec_sesiones_juego
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "resultados publicos del ranking" on expotec_resultados_publicos;
+create policy "resultados publicos del ranking"
+on expotec_resultados_publicos
+for select
+to anon, authenticated
+using (true);
+
+drop policy if exists "admins leen su propia fila" on expotec_admins;
+create policy "admins leen su propia fila"
+on expotec_admins
+for select
+to authenticated
+using (usuario_id = auth.uid());
+
+-- El panel administrativo necesita leer TODO el contenido (incluidos
+-- borradores). No se conceden permisos de escritura al cliente: la escritura
+-- de contenido sigue siendo solo por RPC de administrador.
+drop policy if exists "contenido completo para administrador (cursos)" on cursos;
+create policy "contenido completo para administrador (cursos)"
+on cursos
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "contenido completo para administrador (unidades)" on unidades;
+create policy "contenido completo para administrador (unidades)"
+on unidades
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "contenido completo para administrador (lecciones)" on lecciones;
+create policy "contenido completo para administrador (lecciones)"
+on lecciones
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "contenido completo para administrador (preguntas)" on preguntas;
+create policy "contenido completo para administrador (preguntas)"
+on preguntas
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "contenido completo para administrador (opciones)" on opciones;
+create policy "contenido completo para administrador (opciones)"
+on opciones
+for select
+to authenticated
+using (es_administrador_expotec());
+
+drop policy if exists "soluciones para administrador" on soluciones;
+create policy "soluciones para administrador"
+on soluciones
+for select
+to authenticated
+using (es_administrador_expotec());
+
+grant select on expotec_resultados_publicos to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 6. Realtime: publicacion de la tabla publica para Postgres Changes
+-- ---------------------------------------------------------------------------
+
+do $$
+begin
+    if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+        if not exists (
+            select 1 from pg_publication_tables
+            where pubname = 'supabase_realtime'
+              and schemaname = 'public'
+              and tablename = 'expotec_resultados_publicos'
+        ) then
+            alter publication supabase_realtime add table public.expotec_resultados_publicos;
+        end if;
+    end if;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 7. RPC del participante
+--
+-- Todas: security definer + search_path fijado + verificacion de propiedad
+-- con auth.uid(). El cliente solo ejecuta estas funciones.
+-- ---------------------------------------------------------------------------
+
+-- Evento activo con su desafio: datos de solo lectura para las pantallas.
+create or replace function expotec_evento_activo()
+returns table (
+    id uuid,
+    nombre varchar,
+    descripcion text,
+    fecha_inicio timestamptz,
+    fecha_fin timestamptz,
+    estado varchar,
+    desafio_id uuid,
+    desafio_nombre varchar,
+    version integer,
+    cantidad_preguntas integer,
+    puntos_por_correcta integer,
+    intentos_permitidos integer,
+    tiempo_cuestionario_seg integer,
+    duracion_juego_seg integer,
+    vidas_juego integer
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select
+        e.id, e.nombre, e.descripcion, e.fecha_inicio, e.fecha_fin, e.estado,
+        d.id, d.nombre, d.version, d.cantidad_preguntas, d.puntos_por_correcta,
+        d.intentos_permitidos, d.tiempo_cuestionario_seg, d.duracion_juego_seg,
+        d.vidas_juego
+    from expotec_eventos e
+    join expotec_desafios d on d.evento_id = e.id
+    where e.estado = 'activo'
+      and (e.fecha_inicio is null or e.fecha_inicio <= now())
+      and (e.fecha_fin is null or now() <= e.fecha_fin)
+    order by e.created_at desc
+    limit 1;
+$$;
+
+-- Comprueba si un alias puede usarse en un evento. La validacion definitiva
+-- vive en expotec_iniciar_partida, nunca solo en el cliente.
+create or replace function expotec_alias_disponible(
+    p_evento_id uuid,
+    p_alias text
+)
+returns table (
+    disponible boolean,
+    alias_normalizado varchar,
+    mensaje varchar
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_normalizado varchar;
+    v_mensaje text;
+begin
+    v_mensaje := expotec_alias_inconveniente(p_alias);
+    if v_mensaje is not null then
+        return query select false, null::varchar, v_mensaje::varchar;
+        return;
+    end if;
+
+    v_normalizado := expotec_alias_normalizado(p_alias);
+
+    if not expotec_evento_ventana_abierta(p_evento_id) then
+        return query select false, v_normalizado, 'El evento no está activo ahora mismo.'::varchar;
+        return;
+    end if;
+
+    if not exists (
+        select 1
+        from expotec_participantes x
+        where x.evento_id = p_evento_id
+          and x.alias_normalizado = v_normalizado
+    ) then
+        return query select true, v_normalizado, null::varchar;
+        return;
+    end if;
+
+    return query
+    select false, v_normalizado, 'Ese nombre ya está en uso en este evento.'::varchar;
+end;
+$$;
+
+-- Parte de expotec_iniciar_partida: registra (o recupera) al participante.
+create or replace function expotec_registrar_participante(
+    p_evento_id uuid,
+    p_alias text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_normalizado varchar;
+    v_id uuid;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para participar';
+    end if;
+
+    v_normalizado := expotec_alias_normalizado(p_alias);
+
+    select x.id into v_id
+    from expotec_participantes x
+    where x.evento_id = p_evento_id
+      and x.alias_normalizado = v_normalizado;
+
+    if v_id is not null then
+        if exists (
+            select 1 from expotec_participantes x2
+            where x2.id = v_id and x2.usuario_id = v_usuario
+        ) then
+            return v_id;
+        end if;
+        raise exception 'Ese nombre ya está en uso en este evento.';
+    end if;
+
+    insert into expotec_participantes (evento_id, usuario_id, alias, alias_normalizado)
+    values (
+        p_evento_id,
+        v_usuario,
+        btrim(p_alias),
+        v_normalizado
+    )
+    on conflict (evento_id, alias_normalizado) do nothing;
+
+    select x.id into v_id
+    from expotec_participantes x
+    where x.evento_id = p_evento_id
+      and x.alias_normalizado = v_normalizado;
+
+    if v_id is null then
+        raise exception 'Ese nombre ya está en uso en este evento.';
+    end if;
+
+    return v_id;
+end;
+$$;
+
+revoke all on function expotec_registrar_participante(uuid, text) from public;
+
+-- Cuenta los intentos evidentemente gastados del usuario en el evento.
+-- Un intento abandonado sin ninguna respuesta no se cobra: recuperar un
+-- arranque por error no castiga al participante.
+create or replace function expotec_intentos_gastados(
+    p_evento_id uuid,
+    p_usuario uuid
+)
+returns integer
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select count(*)::integer
+    from expotec_partidas p
+    where p.evento_id = p_evento_id
+      and p.usuario_id = p_usuario
+      and (
+          p.estado <> 'abandonada'
+          or exists (
+              select 1 from expotec_respuestas r
+              where r.partida_id = p.id
+          )
+      );
+$$;
+
+revoke all on function expotec_intentos_gastados(uuid, uuid) from public;
+
+-- Inicia (o recupera) una partida competitiva: crea el participante si hace
+-- falta, congela el desafio y asigna preguntas y opciones con orden aleatorio
+-- guardado. Devuelve la partida lista para jugar o una partida abierta propia.
+create or replace function expotec_iniciar_partida(
+    p_evento_id uuid,
+    p_alias text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_mensaje text;
+    v_evento record;
+    v_desafio record;
+    v_participante uuid;
+    v_gastados integer;
+    v_partida_abierta uuid;
+    v_partida uuid;
+    v_cantidad integer;
+    v_config jsonb;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para participar';
+    end if;
+
+    -- 1) Evento activo y ventana vigente.
+    if not expotec_evento_ventana_abierta(p_evento_id) then
+        raise exception 'El evento no está activo ahora mismo.';
+    end if;
+
+    select e.id, e.nombre
+    into v_evento
+    from expotec_eventos e
+    where e.id = p_evento_id;
+
+    if v_evento.id is null then
+        raise exception 'El evento no existe.';
+    end if;
+
+    -- 2) Alias valido.
+    v_mensaje := expotec_alias_inconveniente(p_alias);
+    if v_mensaje is not null then
+        raise exception '%', v_mensaje;
+    end if;
+
+    select d.id, d.nombre, d.version, d.cantidad_preguntas, d.puntos_por_correcta,
+           d.tiempo_cuestionario_seg, d.duracion_juego_seg, d.vidas_juego,
+           d.intentos_permitidos
+    into v_desafio
+    from expotec_desafios d
+    where d.evento_id = p_evento_id;
+
+    if v_desafio.id is null then
+        raise exception 'El evento todavía no tiene un desafío configurado.';
+    end if;
+
+    -- 3) Participante por alias (unico por evento a nivel de base de datos).
+    v_participante := expotec_registrar_participante(p_evento_id, p_alias);
+
+    -- 4) Si el usuario ya tiene una partida abierta en este evento se recupera
+    --    en lugar de crear una nueva: la recarga no duplica ni pierde estado.
+    select p.id into v_partida_abierta
+    from expotec_partidas p
+    where p.usuario_id = v_usuario
+      and p.evento_id = p_evento_id
+      and p.estado in ('creada', 'en_cuestionario', 'cuestionario_completado', 'en_juego')
+    limit 1;
+
+    if v_partida_abierta is not null then
+        return v_partida_abierta;
+    end if;
+
+    -- 5) Limite de intentos por participante.
+    v_gastados := expotec_intentos_gastados(p_evento_id, v_usuario);
+    if v_gastados >= coalesce(v_desafio.intentos_permitidos, 1) then
+        raise exception 'Ya usaste tus intentos para este evento (% de %).',
+            v_gastados, coalesce(v_desafio.intentos_permitidos, 1);
+    end if;
+
+    -- 6) Preguntas del desafio, suficientes y con contenido.
+    select count(*)::integer into v_cantidad
+    from expotec_desafio_preguntas dp
+    join preguntas q on q.id = dp.pregunta_id
+    where dp.desafio_id = v_desafio.id
+      and q.estado_publicacion in ('publicado', 'borrador')
+      and q.tipo = 'seleccion'
+      and btrim(coalesce(q.enunciado, '')) <> '';
+
+    if v_cantidad < coalesce(v_desafio.cantidad_preguntas, 1) then
+        raise exception 'El desafío todavía no tiene sus % preguntas configuradas. Avisá al equipo de Kodigo.',
+            coalesce(v_desafio.cantidad_preguntas, 1);
+    end if;
+
+    v_cantidad := v_desafio.cantidad_preguntas;
+
+    -- 7) Congela el desafio con la primera partida: ya congelado no cambia nada.
+    update expotec_desafios
+    set congelado_en = coalesce(congelado_en, now())
+    where id = v_desafio.id;
+
+    -- 8) Crea la partida con las reglas congeladas.
+    v_config := jsonb_build_object(
+        'evento', jsonb_build_object('id', v_evento.id, 'nombre', v_evento.nombre),
+        'desafio', jsonb_build_object(
+            'id', v_desafio.id,
+            'nombre', v_desafio.nombre,
+            'version', v_desafio.version,
+            'cantidad_preguntas', v_cantidad,
+            'puntos_por_correcta', v_desafio.puntos_por_correcta,
+            'tiempo_cuestionario_seg', v_desafio.tiempo_cuestionario_seg,
+            'duracion_juego_seg', v_desafio.duracion_juego_seg,
+            'vidas_juego', v_desafio.vidas_juego,
+            'intentos_permitidos', v_desafio.intentos_permitidos
+        )
+    );
+
+    insert into expotec_partidas (
+        evento_id, desafio_id, participante_id, usuario_id, alias,
+        estado, config_snapshot, iniciado_at, vencimiento_at
+    )
+    values (
+        p_evento_id, v_desafio.id, v_participante, v_usuario,
+        btrim(p_alias),
+        'en_cuestionario',
+        v_config,
+        now(),
+        case
+            when v_desafio.tiempo_cuestionario_seg is null then null
+            else now() + make_interval(secs => v_desafio.tiempo_cuestionario_seg)
+        end
+    )
+    returning id into v_partida;
+
+    -- 9) Asignacion aleatoria de la seleccion en orden aleatorio. random()
+    --    corre en el servidor: el cliente no puede elegir ni predecir el orden.
+    insert into expotec_preguntas_asignadas (partida_id, pregunta_id, orden, opciones_orden)
+    select
+        v_partida,
+        seleccionadas.id,
+        seleccionadas.posicion - 1,
+        mezcladas.opciones
+    from (
+        select dp.pregunta_id as id,
+               row_number() over (order by random()) as posicion
+        from (
+            select dp2.pregunta_id
+            from expotec_desafio_preguntas dp2
+            join preguntas q2 on q2.id = dp2.pregunta_id
+            where dp2.desafio_id = v_desafio.id
+              and q2.estado_publicacion in ('publicado', 'borrador')
+              and q2.tipo = 'seleccion'
+              and btrim(coalesce(q2.enunciado, '')) <> ''
+            order by random()
+            limit v_cantidad
+        ) pool
+    ) seleccionadas
+    cross join lateral (
+        select jsonb_agg(o.id order by random()) opciones
+        from opciones o
+        where o.pregunta_id = seleccionadas.id
+    ) mezcladas;
+
+    return v_partida;
+end;
+$$;
+
+-- Estado completo de la partida para pintar (y reanudar) el cuestionario.
+-- Nunca incluye cual opcion es correcta ni explicaciones: esas salen por una
+-- operacion autorizada aparte, solo cuando el intento termino.
+create or replace function expotec_estado_partida(p_partida_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_partida expotec_partidas;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para consultar la partida';
+    end if;
+
+    select * into v_partida
+    from expotec_partidas p
+    where p.id = p_partida_id and p.usuario_id = v_usuario;
+
+    if v_partida.id is null then
+        raise exception 'La partida no existe o no te pertenece.';
+    end if;
+
+    -- Vencimiento: una partida en cuestionario que excedio su plazo queda
+    -- vencida (incompleta, sin resultado oficial).
+    if v_partida.estado = 'en_cuestionario'
+       and v_partida.vencimiento_at is not null
+       and now() > v_partida.vencimiento_at
+    then
+        update expotec_partidas
+        set estado = 'vencida',
+            finalizado_at = vencimiento_at
+        where id = v_partida.id
+          and estado = 'en_cuestionario';
+
+        select * into v_partida from expotec_partidas p where p.id = p_partida_id;
+    end if;
+
+    return jsonb_build_object(
+        'servidor_at', now(),
+        'partida', jsonb_build_object(
+            'id', v_partida.id,
+            'estado', v_partida.estado,
+            'alias', v_partida.alias,
+            'evento_id', v_partida.evento_id,
+            'iniciado_at', v_partida.iniciado_at,
+            'vencimiento_at', v_partida.vencimiento_at,
+            'completado_at', v_partida.cuestionario_completado_at,
+            'finalizado_at', v_partida.finalizado_at,
+            'respondidas', v_partida.respondidas,
+            'correctas', v_partida.correctas,
+            'incorrectas', v_partida.incorrectas,
+            'puntaje_cuestionario', v_partida.puntaje_cuestionario,
+            'tiempo_cuestionario_seg', v_partida.tiempo_cuestionario_seg,
+            'config', v_partida.config_snapshot
+        ),
+        'preguntas', coalesce((
+            select jsonb_agg(
+                jsonb_build_object(
+                    'id', a.id,
+                    'orden', a.orden,
+                    'enunciado', q.enunciado,
+                    'opciones', coalesce((
+                        select jsonb_agg(
+                            jsonb_build_object('id', o.id, 'texto', o.texto)
+                            order by ord.ord
+                        )
+                        from jsonb_array_elements_text(a.opciones_orden) with ordinality ord(id_texto, ord)
+                        join opciones o on o.id::text = ord.id_texto
+                    ), '[]'::jsonb)
+                ) order by a.orden
+            )
+            from expotec_preguntas_asignadas a
+            join preguntas q on q.id = a.pregunta_id
+            where a.partida_id = v_partida.id
+        ), '[]'::jsonb),
+        'respuestas', coalesce((
+            select jsonb_agg(
+                jsonb_build_object(
+                    'pregunta_asignada_id', r.pregunta_asignada_id,
+                    'opcion_id', r.opcion_id,
+                    'respondido_at', r.respondido_at
+                ) order by r.respondido_at
+            )
+            from expotec_respuestas r
+            where r.partida_id = v_partida.id
+        ), '[]'::jsonb)
+    );
+end;
+$$;
+
+-- Confirma una respuesta. Verifica en orden: sesion, propiedad de la partida,
+-- pertenencia de la pregunta a la partida, vigencia de evento/partida/plazo,
+-- existencia de la opcion y pertenencia a la pregunta, ausencia de respuesta
+-- previa. Es idempotente: la unica (partida, pregunta_asignada) impide dobles
+-- registros incluso si dos pedidos llegan al mismo tiempo; el segundo pedido
+-- ve la respuesta ya guardada y devuelve el mismo dato sin sumar puntos.
+create or replace function expotec_responder(
+    p_partida_id uuid,
+    p_pregunta_asignada_id uuid,
+    p_opcion_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_partida expotec_partidas;
+    v_asignada expotec_preguntas_asignadas;
+    v_respuesta_existente expotec_respuestas;
+    v_correcta uuid;
+    v_correspondiente boolean;
+    v_cantidad integer;
+    v_puntos integer;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para responder';
+    end if;
+
+    select * into v_partida
+    from expotec_partidas p
+    where p.id = p_partida_id and p.usuario_id = v_usuario;
+
+    if v_partida.id is null then
+        raise exception 'La partida no existe o no te pertenece.';
+    end if;
+
+    if not expotec_evento_ventana_abierta(v_partida.evento_id) then
+        raise exception 'El evento ya no está activo.';
+    end if;
+
+    if not (v_partida.estado in ('en_cuestionario', 'creada')) then
+        raise exception 'El cuestionario ya no acepta respuestas.';
+    end if;
+
+    if v_partida.vencimiento_at is not null and now() > v_partida.vencimiento_at then
+        update expotec_partidas
+        set estado = 'vencida',
+            finalizado_at = vencimiento_at
+        where id = v_partida.id and estado in ('creada', 'en_cuestionario');
+
+        raise exception 'Se acabó el tiempo de la partida.';
+    end if;
+
+    select * into v_asignada
+    from expotec_preguntas_asignadas a
+    where a.id = p_pregunta_asignada_id
+      and a.partida_id = v_partida.id;
+
+    if v_asignada.id is null then
+        raise exception 'La pregunta no fue asignada a esta partida.';
+    end if;
+
+    select s.opcion_correcta_id into v_correcta
+    from soluciones s
+    where s.pregunta_id = v_asignada.pregunta_id;
+
+    if v_correcta is null then
+        raise exception 'Esta pregunta todavía no tiene solución configurada. Avisá al equipo.';
+    end if;
+
+    -- La opcion debe existir y pertenecer a la pregunta asignada.
+    select exists (
+        select 1
+        from opciones o
+        where o.id = p_opcion_id
+          and o.pregunta_id = v_asignada.pregunta_id
+    ) into v_correspondiente;
+
+    if not v_correspondiente then
+        raise exception 'La opción no pertenece a esta pregunta.';
+    end if;
+
+    -- Respuesta previa: idempotencia (nunca se modifica ni se duplica).
+    select * into v_respuesta_existente
+    from expotec_respuestas r
+    where r.partida_id = v_partida.id
+      and r.pregunta_asignada_id = p_pregunta_asignada_id;
+
+    if v_respuesta_existente.id is not null then
+        return expotec_progreso_partida_jsonb(v_partida.id, true);
+    end if;
+
+    v_puntos := case
+        when v_correcta = p_opcion_id
+        then (v_partida.config_snapshot -> 'desafio' ->> 'puntos_por_correcta')::integer
+        else 0
+    end;
+
+    insert into expotec_respuestas (
+        partida_id, pregunta_asignada_id, pregunta_id, opcion_id, correcta, puntos
+    )
+    values (
+        v_partida.id, p_pregunta_asignada_id, v_asignada.pregunta_id,
+        p_opcion_id, (v_correcta = p_opcion_id), v_puntos
+    )
+    on conflict (partida_id, pregunta_asignada_id) do nothing;
+
+    -- Contadores recalculados en la misma transaccion: nunca se suman dos
+    -- veces gracias a la restriccion unica.
+    update expotec_partidas
+    set respondidas = (
+            select count(*)::integer from expotec_respuestas where partida_id = v_partida.id
+        ),
+        correctas = (
+            select count(*)::integer from expotec_respuestas
+            where partida_id = v_partida.id and correcta
+        ),
+        incorrectas = (
+            select count(*)::integer from expotec_respuestas
+            where partida_id = v_partida.id and not correcta
+        ),
+        puntaje_cuestionario = (
+            select coalesce(sum(puntos), 0)::integer from expotec_respuestas
+            where partida_id = v_partida.id
+        )
+    where id = v_partida.id
+    returning (config_snapshot -> 'desafio' ->> 'cantidad_preguntas')::integer into v_cantidad;
+
+    if (select respondidas from expotec_partidas where id = v_partida.id) >= v_cantidad then
+        update expotec_partidas
+        set estado = 'cuestionario_completado',
+            cuestionario_completado_at = now(),
+            finalizado_at = null,
+            tiempo_cuestionario_seg = round(
+                extract(epoch from (now() - iniciado_at))::numeric, 2
+            )
+        where id = v_partida.id
+          and estado in ('creada', 'en_cuestionario');
+    end if;
+
+    return expotec_progreso_partida_jsonb(v_partida.id, false);
+end;
+$$;
+
+-- Progreso del cuestionario que ve el cliente: conteos agregados solamente.
+-- Durante el cuestionario no se revela el desglose correcto/incorrecto.
+create or replace function expotec_progreso_partida_jsonb(
+    p_partida_id uuid,
+    p_ya_registrada boolean
+)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_partida expotec_partidas;
+begin
+    select * into v_partida from expotec_partidas where id = p_partida_id;
+
+    return jsonb_build_object(
+        'ya_registrada', coalesce(p_ya_registrada, false),
+        'respondidas', v_partida.respondidas,
+        'pendientes', greatest(
+            (v_partida.config_snapshot -> 'desafio' ->> 'cantidad_preguntas')::integer
+              - v_partida.respondidas,
+            0
+        ),
+        'completado', v_partida.estado in ('cuestionario_completado', 'en_juego', 'finalizada'),
+        'respondido_at', now(),
+        'servidor_at', now()
+    );
+end;
+$$;
+
+-- Arranca (o reanuda) Core Defender de una partida con el cuestionario listo.
+create or replace function expotec_iniciar_juego(p_partida_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_partida expotec_partidas;
+    v_sesion expotec_sesiones_juego;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para jugar';
+    end if;
+
+    select * into v_partida
+    from expotec_partidas p
+    where p.id = p_partida_id and p.usuario_id = v_usuario;
+
+    if v_partida.id is null then
+        raise exception 'La partida no existe o no te pertenece.';
+    end if;
+
+    if not expotec_evento_ventana_abierta(v_partida.evento_id) then
+        raise exception 'El evento ya no está activo.';
+    end if;
+
+    if v_partida.estado = 'en_juego' then
+        -- Reconexion: la sesion ya abierta se recupera sin reiniciar el tiempo.
+        select * into v_sesion from expotec_sesiones_juego s where s.partida_id = v_partida.id;
+        return jsonb_build_object(
+            'sesion_id', v_sesion.id,
+            'duracion_max_seg', (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer,
+            'vidas', (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer,
+            'reanudada', true
+        );
+    end if;
+
+    if v_partida.estado <> 'cuestionario_completado' then
+        raise exception 'Antes de jugar hay que terminar el cuestionario.';
+    end if;
+
+    insert into expotec_sesiones_juego (partida_id, ticket)
+    values (v_partida.id, gen_random_uuid())
+    on conflict (partida_id) do nothing;
+
+    select * into v_sesion from expotec_sesiones_juego s where s.partida_id = v_partida.id;
+
+    update expotec_partidas
+    set estado = 'en_juego'
+    where id = v_partida.id and estado = 'cuestionario_completado';
+
+    return jsonb_build_object(
+        'sesion_id', v_sesion.id,
+        'duracion_max_seg', (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer,
+        'vidas', (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer,
+        'reanudada', false
+    );
+end;
+$$;
+
+-- Telemetria opcional del juego: marcas de progreso cada tantos segundos.
+-- Conserva los checkpoints recibidos para la validacion final.
+create or replace function expotec_checkpoint_juego(
+    p_sesion_id uuid,
+    p_checkpoints jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para enviar telemetria';
+    end if;
+
+    if p_checkpoints is null or jsonb_typeof(p_checkpoints) <> 'array' then
+        raise exception 'Formato de checkpoints invalido';
+    end if;
+
+    update expotec_sesiones_juego s
+    set checkpoints = coalesce(s.checkpoints, '[]'::jsonb) || p_checkpoints
+    where s.id = p_sesion_id
+      and s.estado = 'en_curso'
+      and exists (
+          select 1 from expotec_partidas p
+          where p.id = s.partida_id and p.usuario_id = v_usuario
+      );
+end;
+$$;
+
+-- Limites de plausibilidad del juego (espejados en src/services/coreDefender.js):
+--   MAX_DESTRUIDOS_POR_SEGUNDO: techo absoluto de destrucciones por segundo.
+--   MARGEN_DESTRUIDOS: margen fijo para picos iniciales.
+-- El servidor valida contra el tiempo REAL de la sesion medido en la base.
+create or replace function expotec_tope_destruidos(p_duracion numeric)
+returns integer
+language sql
+immutable
+as $$
+    select least(
+        greatest(floor(p_duracion * 2.5 + 8)::integer, 0),
+        2000
+    );
+$$;
+
+-- Valida y registra el resultado final de Core Defender, cierra la partida de
+-- manera atomica y publica el resultado oficial. Idempotente: una partida
+-- finalizada no puede volver a abrirse ni sumar puntos otra vez.
+create or replace function expotec_finalizar_juego(
+    p_sesion_id uuid,
+    p_meteoritos integer,
+    p_impactos integer,
+    p_duracion_seg numeric,
+    p_checkpoints jsonb default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_sesion expotec_sesiones_juego;
+    v_partida expotec_partidas;
+    v_transcurrido numeric;
+    v_techo integer;
+    v_vidas integer;
+    v_duracion_max integer;
+    v_duracion numeric;
+    v_impactos integer;
+    v_meteoritos integer;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para finalizar el juego';
+    end if;
+
+    if p_meteoritos is null or p_meteoritos < 0 or p_impactos is null or p_impactos < 0
+       or p_duracion_seg is null or p_duracion_seg < 0 then
+        raise exception 'El resultado del juego no tiene un formato valido.';
+    end if;
+
+    select * into v_sesion
+    from expotec_sesiones_juego s
+    where s.id = p_sesion_id
+      and exists (
+          select 1 from expotec_partidas p
+          where p.id = s.partida_id and p.usuario_id = v_usuario
+      );
+
+    if v_sesion.id is null then
+        raise exception 'La sesion de juego no existe o no te pertenece.';
+    end if;
+
+    select * into v_partida
+    from expotec_partidas p
+    where p.id = v_sesion.partida_id;
+
+    -- Partida ya finalizada: idempotencia, devuelve el mismo resultado.
+    if v_partida.estado = 'finalizada' then
+        return jsonb_build_object(
+            'partida_id', v_partida.id,
+            'estado', v_partida.estado,
+            'puntaje_juego', v_partida.puntaje_juego,
+            'puntaje_cuestionario', v_partida.puntaje_cuestionario,
+            'puntaje_total', v_partida.puntaje_total,
+            'correctas', v_partida.correctas,
+            'incorrectas', v_partida.incorrectas,
+            'tiempo_cuestionario_seg', v_partida.tiempo_cuestionario_seg,
+            'finalizado_at', v_partida.finalizado_at
+        );
+    end if;
+
+    if v_partida.estado <> 'en_juego' or v_sesion.estado <> 'en_curso' then
+        raise exception 'La partida ya no está en juego.';
+    end if;
+
+    -- El cronometro manda el servidor: la duracion reportada no puede superar
+    -- el tiempo real transcurrido desde el arranque de la sesion (con margen
+    -- para latencia) ni el limite del desafio.
+    v_transcurrido := extract(epoch from (now() - v_sesion.iniciado_at));
+    v_duracion_max := (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer;
+    v_vidas := (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer;
+
+    if p_duracion_seg > v_transcurrido + 2 then
+        raise exception 'La duración reportada no coincide con el tiempo real.';
+    end if;
+    if p_duracion_seg > v_duracion_max then
+        v_duracion := v_duracion_max::numeric;
+    else
+        v_duracion := p_duracion_seg;
+    end if;
+
+    -- Impactos plausibles: no se puede perder mas vidas que las permitidas,
+    -- y cada impacto consume al menos una vida.
+    v_impactos := least(p_impactos, v_vidas);
+
+    -- Techo de meteoritos segun duracion y velocidad maxima del juego.
+    v_techo := expotec_tope_destruidos(v_duracion);
+    v_meteoritos := least(p_meteoritos, v_techo);
+
+    if p_checkpoints is not null and jsonb_typeof(p_checkpoints) = 'array' then
+        update expotec_sesiones_juego
+        set checkpoints = coalesce(checkpoints, '[]'::jsonb) || p_checkpoints
+        where id = v_sesion.id;
+    end if;
+
+    -- Cierre atomico de sesion y partida: solo la primera llamada cruza la
+    -- condicion de estado; las repetidas no encuentran filas y son idempotentes.
+    update expotec_sesiones_juego
+    set estado = 'cerrada',
+        finalizado_at = now(),
+        duracion_seg = v_duracion,
+        meteoritos = v_meteoritos,
+        impactos = v_impactos
+    where id = v_sesion.id
+      and estado = 'en_curso'
+      returning id into v_sesion.id;
+
+    if v_sesion.id is not null then
+        update expotec_partidas
+        set estado = 'finalizada',
+            finalizado_at = now(),
+            puntaje_juego = v_meteoritos
+        where id = v_partida.id
+          and estado = 'en_juego'
+          returning id, finalizado_at into v_partida.id, v_partida.finalizado_at;
+
+        select * into v_partida from expotec_partidas p where p.id = v_partida.id;
+
+        -- Resultado oficial minimo para el ranking publico. Solo vive aqui:
+        -- el cliente no puede insertarlo ni modificarlo.
+        insert into expotec_resultados_publicos (
+            partida_id, evento_id, alias, alias_normalizado,
+            correctas, incorrectas,
+            puntaje_cuestionario, puntaje_juego, puntaje_total,
+            tiempo_cuestionario_seg, finalizado_at
+        )
+        values (
+            v_partida.id, v_partida.evento_id, v_partida.alias,
+            expotec_alias_normalizado(v_partida.alias),
+            v_partida.correctas, v_partida.incorrectas,
+            v_partida.puntaje_cuestionario, v_partida.puntaje_juego,
+            v_partida.puntaje_cuestionario + v_partida.puntaje_juego,
+            v_partida.tiempo_cuestionario_seg,
+            v_partida.finalizado_at
+        )
+        on conflict (partida_id) do nothing;
+    end if;
+
+    select * into v_partida from expotec_partidas p where p.id = v_partida.id;
+
+    return jsonb_build_object(
+        'partida_id', v_partida.id,
+        'estado', v_partida.estado,
+        'puntaje_juego', v_partida.puntaje_juego,
+        'puntaje_cuestionario', v_partida.puntaje_cuestionario,
+        'puntaje_total', v_partida.puntaje_total,
+        'correctas', v_partida.correctas,
+        'incorrectas', v_partida.incorrectas,
+        'tiempo_cuestionario_seg', v_partida.tiempo_cuestionario_seg,
+        'finalizado_at', v_partida.finalizado_at
+    );
+end;
+$$;
+
+-- Abandona el intento: queda como partida incompleta, sin resultado oficial.
+create or replace function expotec_abandonar(p_partida_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_partida expotec_partidas;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para abandonar';
+    end if;
+
+    select * into v_partida
+    from expotec_partidas p
+    where p.id = p_partida_id and p.usuario_id = v_usuario;
+
+    if v_partida.id is null then
+        raise exception 'La partida no existe o no te pertenece.';
+    end if;
+
+    if v_partida.estado in ('finalizada', 'vencida', 'abandonada') then
+        return jsonb_build_object('estado', v_partida.estado, 'abandonada', true);
+    end if;
+
+    if v_partida.estado = 'en_juego' then
+        update expotec_sesiones_juego
+        set estado = 'cerrada',
+            finalizado_at = now()
+        where partida_id = v_partida.id
+          and estado = 'en_curso';
+    end if;
+
+    update expotec_partidas
+    set estado = 'abandonada',
+        finalizado_at = now()
+    where id = v_partida.id
+      and estado in ('creada', 'en_cuestionario', 'cuestionario_completado', 'en_juego');
+
+    return jsonb_build_object('estado', 'abandonada', 'abandonada', true, 'servidor_at', now());
+end;
+$$;
+
+-- Soluciones autorizadas del cuestionario: solo con el intento FINALIZADO y
+-- cuando el desafio permite mostrar resultados. Abandonadas y vencidas no las
+-- reciben (no hay resultado oficial de un intento incompleto).
+create or replace function expotec_obtener_soluciones(p_partida_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_partida expotec_partidas;
+    v_permite boolean;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para consultar las soluciones';
+    end if;
+
+    select * into v_partida
+    from expotec_partidas p
+    where p.id = p_partida_id and p.usuario_id = v_usuario;
+
+    if v_partida.id is null then
+        raise exception 'La partida no existe o no te pertenece.';
+    end if;
+
+    if v_partida.estado <> 'finalizada' then
+        raise exception 'Las soluciones aparecen al terminar el intento sin abandonar.';
+    end if;
+
+    select coalesce(d.mostrar_soluciones, true) into v_permite
+    from expotec_desafios d
+    where d.id = v_partida.desafio_id;
+
+    if not v_permite then
+        raise exception 'Este evento todavía no muestra las soluciones.';
+    end if;
+
+    return jsonb_build_object(
+        'preguntas', coalesce((
+            select jsonb_agg(
+                jsonb_build_object(
+                    'orden', a.orden,
+                    'enunciado', q.enunciado,
+                    'elegida', (
+                        select jsonb_build_object('id', o.id, 'texto', o.texto)
+                        from expotec_respuestas r
+                        join opciones o on o.id = r.opcion_id
+                        where r.partida_id = v_partida.id
+                          and r.pregunta_asignada_id = a.id
+                    ),
+                    'correcta', (
+                        select jsonb_build_object('id', o.id, 'texto', o.texto)
+                        from soluciones s
+                        join opciones o on o.id = s.opcion_correcta_id
+                        where s.pregunta_id = a.pregunta_id
+                    ),
+                    'acerto', (
+                        select r.correcta
+                        from expotec_respuestas r
+                        where r.partida_id = v_partida.id
+                          and r.pregunta_asignada_id = a.id
+                    ),
+                    'sin_respuesta', not exists (
+                        select 1 from expotec_respuestas r
+                        where r.partida_id = v_partida.id
+                          and r.pregunta_asignada_id = a.id
+                    ),
+                    'explicacion', (
+                        select s.explicacion
+                        from soluciones s
+                        where s.pregunta_id = a.pregunta_id
+                    )
+                ) order by a.orden
+            )
+            from expotec_preguntas_asignadas a
+            join preguntas q on q.id = a.pregunta_id
+            where a.partida_id = v_partida.id
+        ), '[]'::jsonb)
+    );
+end;
+$$;
+
+-- Mis partidas en un evento (para reconectar y para la pantalla de resultados).
+create or replace function expotec_mis_partidas(p_evento_id uuid)
+returns table (
+    id uuid,
+    estado varchar,
+    alias varchar,
+    iniciado_at timestamptz,
+    finalizado_at timestamptz,
+    respondidas integer,
+    cantidad_preguntas integer,
+    correctas integer,
+    incorrectas integer,
+    puntaje_cuestionario integer,
+    puntaje_juego integer,
+    puntaje_total integer
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select
+        p.id, p.estado, p.alias, p.iniciado_at, p.finalizado_at,
+        p.respondidas, (p.config_snapshot -> 'desafio' ->> 'cantidad_preguntas')::integer,
+        p.correctas, p.incorrectas, p.puntaje_cuestionario, p.puntaje_juego, p.puntaje_total
+    from expotec_partidas p
+    where p.evento_id = p_evento_id
+      and p.usuario_id = auth.uid()
+    order by p.iniciado_at desc
+    limit 50;
+$$;
+
+-- Resultado propio completo (sin las soluciones del cuestionario).
+create or replace function expotec_resultado_propio(p_partida_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_partida expotec_partidas;
+    v_puesto bigint;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para consultar el resultado';
+    end if;
+
+    select * into v_partida
+    from expotec_partidas p
+    where p.id = p_partida_id and p.usuario_id = v_usuario;
+
+    if v_partida.id is null then
+        raise exception 'La partida no existe o no te pertenece.';
+    end if;
+
+    select count(*) + 1 into v_puesto
+    from expotec_resultados_publicos r
+    where r.evento_id = v_partida.evento_id
+      and (
+          r.puntaje_total > v_partida.puntaje_total
+          or (
+              r.puntaje_total = v_partida.puntaje_total
+              and coalesce(r.tiempo_cuestionario_seg, 1e9) < coalesce(v_partida.tiempo_cuestionario_seg, 1e9)
+          )
+          or (
+              r.puntaje_total = v_partida.puntaje_total
+              and r.tiempo_cuestionario_seg is not null
+              and coalesce(r.tiempo_cuestionario_seg, 1e9) = coalesce(v_partida.tiempo_cuestionario_seg, 1e9)
+              and r.puntaje_juego > v_partida.puntaje_juego
+          )
+          or (
+              r.puntaje_total = v_partida.puntaje_total
+              and coalesce(r.tiempo_cuestionario_seg, 1e9) = coalesce(v_partida.tiempo_cuestionario_seg, 1e9)
+              and r.puntaje_juego = v_partida.puntaje_juego
+              and r.finalizado_at < v_partida.finalizado_at
+          )
+      );
+
+    return jsonb_build_object(
+        'partida', jsonb_build_object(
+            'id', v_partida.id,
+            'estado', v_partida.estado,
+            'alias', v_partida.alias,
+            'correctas', v_partida.correctas,
+            'incorrectas', v_partida.incorrectas,
+            'respondidas', v_partida.respondidas,
+            'puntaje_cuestionario', v_partida.puntaje_cuestionario,
+            'puntaje_juego', v_partida.puntaje_juego,
+            'puntaje_total', v_partida.puntaje_total,
+            'tiempo_cuestionario_seg', v_partida.tiempo_cuestionario_seg,
+            'iniciado_at', v_partida.iniciado_at,
+            'finalizado_at', v_partida.finalizado_at,
+            'config', v_partida.config_snapshot
+        ),
+        'puesto', case when v_partida.estado = 'finalizada' then v_puesto else null end
+    );
+end;
+$$;
+
+-- Ranking oficial del evento. Aplica las reglas documentadas:
+--   * solo resultados oficiales (partidas finalizadas);
+--   * mejor intento valido por participante (unico alias + mejores metricas);
+--   * desempates ordenados: tiempo del cuestionario, puntos del juego,
+--     fecha de envio (de menor a mayor).
+create or replace function expotec_ranking(
+    p_evento_id uuid,
+    p_limite integer default 100
+)
+returns table (
+    puesto bigint,
+    alias varchar,
+    puntaje_total integer,
+    puntaje_cuestionario integer,
+    puntaje_juego integer,
+    correctas integer,
+    incorrectas integer,
+    tiempo_cuestionario_seg numeric,
+    finalizado_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    with oficiales as (
+        select *
+        from expotec_resultados_publicos r
+        where r.evento_id = p_evento_id
+    ), mejores as (
+        select distinct on (alias_normalizado) *
+        from oficiales
+        order by alias_normalizado,
+                 puntaje_total desc,
+                 tiempo_cuestionario_seg asc nulls last,
+                 puntaje_juego desc,
+                 finalizado_at asc
+    )
+    select
+        row_number() over (
+            order by puntaje_total desc,
+                     tiempo_cuestionario_seg asc nulls last,
+                     puntaje_juego desc,
+                     finalizado_at asc
+        ),
+        alias,
+        puntaje_total,
+        puntaje_cuestionario,
+        puntaje_juego,
+        correctas,
+        incorrectas,
+        tiempo_cuestionario_seg,
+        finalizado_at
+    from mejores
+    order by puntaje_total desc,
+             tiempo_cuestionario_seg asc nulls last,
+             puntaje_juego desc,
+             finalizado_at asc
+    limit least(coalesce(p_limite, 100), 500);
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 8. RPC del panel de administracion
+--
+-- Prefijo expotec_admin_. Todas son SECURITY DEFINER con search_path fijado y
+-- arrancan verificando es_administrador_expotec(): un usuario comun recibe
+-- error antes de tocar nada. La identidad de administrador vive sola en la
+-- tabla expotec_admins, poblada por SQL desde el dashboard: el cliente no
+-- puede dar de alta administradores ni a si mismo.
+-- ---------------------------------------------------------------------------
+
+-- Bandera simple para la interfaz: la ruta /admin pregunta esto al entrar.
+create or replace function expotec_admin_es_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select es_administrador_expotec();
+$$;
+
+-- Guard reutilizado por todas las RPC de administracion.
+create or replace function expotec_guard_admin()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    if not es_administrador_expotec() then
+        raise exception 'Solo los administradores pueden usar el panel de ExpoTécnica.';
+    end if;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 8.1 Validadores de publicacion de contenido
+--
+-- Publicar exige contenido completo. Los helpers devuelven el primer
+-- inconveniente como texto, o null cuando el contenido es publicable; las RPC
+-- los usan al asignar estado_publicacion = 'publicado'.
+-- ---------------------------------------------------------------------------
+
+-- Inconveniente de una pregunta seleccion/verdadero_falso: enunciado, opciones
+-- suficientes y distintas, solucion con una unica correcta y explicacion.
+create or replace function expotec_inconveniente_pregunta(p_pregunta_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_pregunta record;
+    v_opciones integer;
+    v_opciones_distintas integer;
+    v_solucion record;
+begin
+    select * into v_pregunta
+    from preguntas where id = p_pregunta_id;
+
+    if v_pregunta.id is null then
+        return 'La pregunta no existe.';
+    end if;
+    if btrim(coalesce(v_pregunta.enunciado, '')) = '' then
+        return 'La pregunta necesita un enunciado';
+    end if;
+
+    select
+        count(*)::integer,
+        count(distinct btrim(texto))::integer
+    into v_opciones, v_opciones_distintas
+    from opciones
+    where pregunta_id = p_pregunta_id
+      and btrim(texto) <> '';
+
+    if v_opciones < 2 or v_opciones_distintas < 2 then
+        return 'La pregunta necesita al menos dos opciones distintas y sin texto vacio.';
+    end if;
+
+    select * into v_solucion from soluciones where pregunta_id = p_pregunta_id;
+
+    if v_solucion.id is null then
+        return 'La pregunta aún no tiene solución definida.';
+    end if;
+    if btrim(coalesce(v_solucion.explicacion, '')) = '' then
+        return 'La solución necesita una explicación';
+    end if;
+
+    if v_solucion.opcion_correcta_id is not null and (
+        not exists (
+            select 1 from opciones
+            where id = v_solucion.opcion_correcta_id
+              and pregunta_id = p_pregunta_id
+        )
+    ) then
+        return 'La opción correcta no pertenece a esta pregunta.';
+    end if;
+
+    return null;
+end;
+$$;
+
+-- Inconveniente de una leccion al publicarse: explicacion y al menos una
+-- pregunta publicada que ademas pase su propio validador.
+create or replace function expotec_inconveniente_leccion(p_leccion_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_leccion record;
+    v_publicadas integer;
+    v_pregunta record;
+    v_inconveniente text;
+begin
+    select * into v_leccion from lecciones where id = p_leccion_id;
+
+    if v_leccion.id is null then
+        return 'La lección no existe.';
+    end if;
+    if btrim(coalesce(v_leccion.explicacion, '')) = '' then
+        return 'La lección necesita una explicación';
+    end if;
+
+    select count(*)::integer into v_publicadas
+    from preguntas
+    where leccion_id = p_leccion_id
+      and estado_publicacion = 'publicado';
+
+    if v_publicadas = 0 then
+        return 'La lección necesita al menos una actividad publicada';
+    end if;
+
+    for v_pregunta in
+        select id, enunciado
+        from preguntas
+        where leccion_id = p_leccion_id
+          and estado_publicacion = 'publicado'
+    loop
+        v_inconveniente := expotec_inconveniente_pregunta(v_pregunta.id);
+        if v_inconveniente is not null then
+            return 'Actividad "' || left(coalesce(v_pregunta.enunciado, ''), 60)
+                || '": ' || v_inconveniente;
+        end if;
+    end loop;
+
+    return null;
+end;
+$$;
+
+-- Inconveniente de una unidad al publicarse: al menos una leccion publicada y
+-- valida.
+create or replace function expotec_inconveniente_unidad(p_unidad_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_unidad record;
+    v_publicadas integer;
+    v_leccion record;
+    v_inconveniente text;
+begin
+    select * into v_unidad from unidades where id = p_unidad_id;
+
+    if v_unidad.id is null then
+        return 'La unidad no existe.';
+    end if;
+
+    select count(*)::integer into v_publicadas
+    from lecciones
+    where unidad_id = p_unidad_id
+      and estado_publicacion = 'publicado';
+
+    if v_publicadas = 0 then
+        return 'La unidad necesita al menos una clase publicada';
+    end if;
+
+    for v_leccion in
+        select id, titulo
+        from lecciones
+        where unidad_id = p_unidad_id
+          and estado_publicacion = 'publicado'
+    loop
+        v_inconveniente := expotec_inconveniente_leccion(v_leccion.id);
+        if v_inconveniente is not null then
+            return 'Clase "' || left(coalesce(v_leccion.titulo, ''), 60)
+                || '": ' || v_inconveniente;
+        end if;
+    end loop;
+
+    return null;
+end;
+$$;
+
+-- Inconveniente de un curso al publicarse: al menos una unidad publicada y
+-- valida.
+create or replace function expotec_inconveniente_curso(p_curso_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_curso record;
+    v_publicadas integer;
+    v_unidad record;
+    v_inconveniente text;
+begin
+    select * into v_curso from cursos where id = p_curso_id;
+
+    if v_curso.id is null then
+        return 'El curso no existe.';
+    end if;
+
+    select count(*)::integer into v_publicadas
+    from unidades
+    where curso_id = p_curso_id
+      and estado_publicacion = 'publicado';
+
+    if v_publicadas = 0 then
+        return 'El curso necesita al menos una unidad publicada';
+    end if;
+
+    for v_unidad in
+        select id, nombre
+        from unidades
+        where curso_id = p_curso_id
+          and estado_publicacion = 'publicado'
+    loop
+        v_inconveniente := expotec_inconveniente_unidad(v_unidad.id);
+        if v_inconveniente is not null then
+            return 'Unidad "' || left(coalesce(v_unidad.nombre, ''), 60)
+                || '": ' || v_inconveniente;
+        end if;
+    end loop;
+
+    return null;
+end;
+$$;
+
+-- Inconveniente de un desafio al activar su evento: configuracion completa,
+-- cantidad suficiente de preguntas y cada una con contenido y solucion.
+create or replace function expotec_inconveniente_desafio(p_desafio_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_desafio record;
+    v_habilitadas integer;
+    v_pregunta record;
+    v_inconveniente text;
+begin
+    select * into v_desafio from expotec_desafios where id = p_desafio_id;
+
+    if v_desafio.id is null then
+        return 'El evento no tiene un desafío configurado.';
+    end if;
+
+    select count(*)::integer into v_habilitadas
+    from expotec_desafio_preguntas dp
+    join preguntas q on q.id = dp.pregunta_id
+    where dp.desafio_id = p_desafio_id
+      and q.estado_publicacion in ('publicado', 'borrador')
+      and q.tipo = 'seleccion';
+
+    if v_habilitadas < coalesce(v_desafio.cantidad_preguntas, 1) then
+        return 'El desafío tiene ' || v_habilitadas
+            || ' de ' || coalesce(v_desafio.cantidad_preguntas, 1)
+            || ' preguntas habilitadas.';
+    end if;
+
+    for v_pregunta in
+        select q.id, q.enunciado
+        from expotec_desafio_preguntas dp
+        join preguntas q on q.id = dp.pregunta_id
+        where dp.desafio_id = p_desafio_id
+          and q.estado_publicacion in ('publicado', 'borrador')
+          and q.tipo = 'seleccion'
+    loop
+        select coalesce((
+            select s.explicacion
+            from soluciones s
+            where s.pregunta_id = v_pregunta.id
+              and s.opcion_correcta_id is not null
+              and btrim(coalesce(s.explicacion, '')) <> ''
+              and exists (
+                  select 1 from opciones o
+                  where o.id = s.opcion_correcta_id
+                    and o.pregunta_id = v_pregunta.id
+              )
+        ), '') into v_inconveniente;
+
+        if v_inconveniente = '' then
+            return 'Pregunta "' || left(coalesce(v_pregunta.enunciado, ''), 60)
+                || '": le falta la solución con su explicación.';
+        end if;
+    end loop;
+
+    return null;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 8.2 CRUD de contenido
+--
+-- Operaciones upsert con lista blanca de campos: el jsonb p_datos determina
+-- que columnas se tocan (p_datos ? 'campo'). No existe borrado por RPC: la
+-- despublicacion es siempre la via para retirar contenido, respetando las
+-- FK restrict del esquema.
+-- ---------------------------------------------------------------------------
+
+create or replace function expotec_admin_guardar_curso(
+    p_id uuid,
+    p_datos jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_id uuid;
+    v_estado text;
+    v_inconveniente text;
+begin
+    perform expotec_guard_admin();
+
+    -- Alta: nombre obligatorio; el resto toma sus valores por defecto.
+    if p_id is null then
+        if p_datos is null or p_datos ->> 'nombre' is null
+           or btrim(p_datos ->> 'nombre') = '' then
+            raise exception 'El curso necesita un nombre.';
+        end if;
+
+        insert into cursos (nombre, descripcion, lema, monograma, logo,
+                            color_acento, imagen_url, orden, estado_publicacion)
+        values (
+            btrim(p_datos ->> 'nombre'),
+            p_datos ->> 'descripcion',
+            p_datos ->> 'lema',
+            p_datos ->> 'monograma',
+            p_datos ->> 'logo',
+            coalesce(p_datos ->> 'color_acento', '#8e05c2'),
+            p_datos ->> 'imagen_url',
+            coalesce((p_datos ->> 'orden')::integer, 0),
+            coalesce(p_datos ->> 'estado_publicacion', 'borrador')
+        )
+        returning id into v_id;
+
+        return v_id;
+    end if;
+
+    update cursos
+    set
+        nombre = case when p_datos ? 'nombre' then btrim(p_datos ->> 'nombre') else nombre end,
+        descripcion = case when p_datos ? 'descripcion' then p_datos ->> 'descripcion' else descripcion end,
+        lema = case when p_datos ? 'lema' then p_datos ->> 'lema' else lema end,
+        monograma = case when p_datos ? 'monograma' then p_datos ->> 'monograma' else monograma end,
+        logo = case when p_datos ? 'logo' then p_datos ->> 'logo' else logo end,
+        color_acento = case when p_datos ? 'color_acento' then p_datos ->> 'color_acento' else color_acento end,
+        imagen_url = case when p_datos ? 'imagen_url' then p_datos ->> 'imagen_url' else imagen_url end,
+        orden = case when p_datos ? 'orden' then coalesce((p_datos ->> 'orden')::integer, 0) else orden end
+    where id = p_id
+    returning id into v_id;
+
+    if v_id is null then
+        raise exception 'El curso no existe.';
+    end if;
+
+    v_estado := p_datos ->> 'estado_publicacion';
+    if v_estado is not null and v_estado in ('borrador', 'publicado', 'oculto') then
+        if v_estado = 'publicado' then
+            v_inconveniente := expotec_inconveniente_curso(p_id);
+            if v_inconveniente is not null then
+                raise exception '%', v_inconveniente;
+            end if;
+        end if;
+        update cursos
+        set estado_publicacion = v_estado
+        where id = p_id;
+    elsif v_estado is not null then
+        raise exception 'El estado del curso debe ser borrador, publicado u oculto.';
+    end if;
+
+    return p_id;
+end;
+$$;
+
+create or replace function expotec_admin_guardar_unidad(
+    p_id uuid,
+    p_datos jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_id uuid;
+    v_estado text;
+    v_orden integer;
+    v_inconveniente text;
+begin
+    perform expotec_guard_admin();
+
+    if p_id is null then
+        if p_datos is null or p_datos ->> 'curso_id' is null then
+            raise exception 'La unidad necesita el curso al que pertenece.';
+        end if;
+        if p_datos ->> 'nombre' is null or btrim(p_datos ->> 'nombre') = '' then
+            raise exception 'La unidad necesita un nombre.';
+        end if;
+
+        select coalesce(max(orden) + 1, 0)::integer into v_orden
+        from unidades where curso_id = (p_datos ->> 'curso_id')::uuid;
+
+        insert into unidades (curso_id, nombre, descripcion, orden, estado_publicacion)
+        values (
+            (p_datos ->> 'curso_id')::uuid,
+            btrim(p_datos ->> 'nombre'),
+            p_datos ->> 'descripcion',
+            coalesce((p_datos ->> 'orden')::integer, v_orden),
+            coalesce(p_datos ->> 'estado_publicacion', 'borrador')
+        )
+        returning id into v_id;
+
+        return v_id;
+    end if;
+
+    update unidades
+    set
+        nombre = case when p_datos ? 'nombre' then btrim(p_datos ->> 'nombre') else nombre end,
+        descripcion = case when p_datos ? 'descripcion' then p_datos ->> 'descripcion' else descripcion end,
+        orden = case when p_datos ? 'orden' then coalesce((p_datos ->> 'orden')::integer, 0) else orden end
+    where id = p_id
+    returning id into v_id;
+
+    if v_id is null then
+        raise exception 'La unidad no existe.';
+    end if;
+
+    v_estado := p_datos ->> 'estado_publicacion';
+    if v_estado is not null and v_estado in ('borrador', 'publicado', 'bloqueada', 'oculta') then
+        if v_estado = 'publicado' then
+            v_inconveniente := expotec_inconveniente_unidad(p_id);
+            if v_inconveniente is not null then
+                raise exception '%', v_inconveniente;
+            end if;
+        end if;
+        update unidades
+        set estado_publicacion = v_estado
+        where id = p_id;
+    elsif v_estado is not null then
+        raise exception 'El estado de la unidad no es valido.';
+    end if;
+
+    return p_id;
+end;
+$$;
+
+create or replace function expotec_admin_guardar_leccion(
+    p_id uuid,
+    p_datos jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_id uuid;
+    v_estado text;
+    v_orden integer;
+    v_inconveniente text;
+begin
+    perform expotec_guard_admin();
+
+    if p_id is null then
+        if p_datos is null or p_datos ->> 'unidad_id' is null then
+            raise exception 'La clase necesita la unidad a la que pertenece.';
+        end if;
+        if p_datos ->> 'titulo' is null or btrim(p_datos ->> 'titulo') = '' then
+            raise exception 'La clase necesita un título.';
+        end if;
+        if p_datos ->> 'explicacion' is null or btrim(p_datos ->> 'explicacion') = '' then
+            raise exception 'La clase necesita su explicación.';
+        end if;
+
+        select coalesce(max(orden) + 1, 0)::integer into v_orden
+        from lecciones where unidad_id = (p_datos ->> 'unidad_id')::uuid;
+
+        insert into lecciones (unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion)
+        values (
+            (p_datos ->> 'unidad_id')::uuid,
+            btrim(p_datos ->> 'titulo'),
+            p_datos ->> 'explicacion',
+            p_datos ->> 'ejemplo_codigo',
+            coalesce((p_datos ->> 'orden')::integer, v_orden),
+            coalesce(p_datos ->> 'estado_publicacion', 'borrador')
+        )
+        returning id into v_id;
+
+        return v_id;
+    end if;
+
+    update lecciones
+    set
+        titulo = case when p_datos ? 'titulo' then btrim(p_datos ->> 'titulo') else titulo end,
+        explicacion = case when p_datos ? 'explicacion' then p_datos ->> 'explicacion' else explicacion end,
+        ejemplo_codigo = case when p_datos ? 'ejemplo_codigo' then p_datos ->> 'ejemplo_codigo' else ejemplo_codigo end,
+        orden = case when p_datos ? 'orden' then coalesce((p_datos ->> 'orden')::integer, 0) else orden end
+    where id = p_id
+    returning id into v_id;
+
+    if v_id is null then
+        raise exception 'La clase no existe.';
+    end if;
+
+    v_estado := p_datos ->> 'estado_publicacion';
+    if v_estado is not null and v_estado in ('borrador', 'publicado', 'bloqueada', 'oculta') then
+        if v_estado = 'publicado' then
+            v_inconveniente := expotec_inconveniente_leccion(p_id);
+            if v_inconveniente is not null then
+                raise exception '%', v_inconveniente;
+            end if;
+        end if;
+        update lecciones
+        set estado_publicacion = v_estado
+        where id = p_id;
+    elsif v_estado is not null then
+        raise exception 'El estado de la clase no es valido.';
+    end if;
+
+    return p_id;
+end;
+$$;
+
+create or replace function expotec_admin_guardar_pregunta(
+    p_id uuid,
+    p_datos jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_id uuid;
+    v_estado text;
+    v_orden integer;
+    v_inconveniente text;
+begin
+    perform expotec_guard_admin();
+
+    if p_id is null then
+        if p_datos is null or p_datos ->> 'leccion_id' is null then
+            raise exception 'La actividad necesita la clase a la que pertenece.';
+        end if;
+        if p_datos ->> 'enunciado' is null or btrim(p_datos ->> 'enunciado') = '' then
+            raise exception 'La actividad necesita un enunciado.';
+        end if;
+
+        select coalesce(max(orden) + 1, 0)::integer into v_orden
+        from preguntas where leccion_id = (p_datos ->> 'leccion_id')::uuid;
+
+        insert into preguntas (leccion_id, enunciado, tipo, datos, orden, estado_publicacion)
+        values (
+            (p_datos ->> 'leccion_id')::uuid,
+            p_datos ->> 'enunciado',
+            coalesce(p_datos ->> 'tipo', 'seleccion'),
+            p_datos -> 'datos',
+            coalesce((p_datos ->> 'orden')::integer, v_orden),
+            coalesce(p_datos ->> 'estado_publicacion', 'borrador')
+        )
+        returning id into v_id;
+
+        return v_id;
+    end if;
+
+    update preguntas
+    set
+        enunciado = case when p_datos ? 'enunciado' then p_datos ->> 'enunciado' else enunciado end,
+        datos = case when p_datos ? 'datos' then p_datos -> 'datos' else datos end,
+        orden = case when p_datos ? 'orden' then coalesce((p_datos ->> 'orden')::integer, 0) else orden end
+    where id = p_id
+    returning id into v_id;
+
+    if v_id is null then
+        raise exception 'La actividad no existe.';
+    end if;
+
+    v_estado := p_datos ->> 'estado_publicacion';
+    if v_estado is not null and v_estado in ('borrador', 'publicado', 'oculta') then
+        if v_estado = 'publicado' then
+            v_inconveniente := expotec_inconveniente_pregunta(p_id);
+            if v_inconveniente is not null then
+                raise exception '%', v_inconveniente;
+            end if;
+        end if;
+        update preguntas
+        set estado_publicacion = v_estado
+        where id = p_id;
+    elsif v_estado is not null then
+        raise exception 'El estado de la actividad no es valido.';
+    end if;
+
+    return p_id;
+end;
+$$;
+
+-- Alta atomica de una actividad de seleccion completa: pregunta, sus opciones
+-- con orden 0..n-1 y asociado la solucion. Devuelve el id de la pregunta.
+create or replace function expotec_admin_crear_pregunta_completa(
+    p_leccion_id uuid,
+    p_enunciado text,
+    p_opciones jsonb,
+    p_indice_correcta integer,
+    p_explicacion text,
+    p_orden integer default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_pregunta uuid;
+    v_opciones_ids uuid[] := '{}';
+    v_orden integer;
+    v_indice integer;
+    v_texto text;
+begin
+    perform expotec_guard_admin();
+
+    if p_leccion_id is null or not exists (select 1 from lecciones where id = p_leccion_id) then
+        raise exception 'La clase de origen no existe.';
+    end if;
+    if p_enunciado is null or btrim(p_enunciado) = '' then
+        raise exception 'La actividad necesita un enunciado.';
+    end if;
+    if p_opciones is null or jsonb_typeof(p_opciones) <> 'array' then
+        raise exception 'Las opciones deben venir en una lista.';
+    end if;
+    if (select count(*) from jsonb_array_elements_text(p_opciones) t(texto)) < 2 then
+        raise exception 'La actividad necesita al menos dos opciones.';
+    end if;
+    if p_indice_correcta is null
+       or p_indice_correcta < 0
+       or p_indice_correcta >= jsonb_array_length(p_opciones) then
+        raise exception 'El índice de la opción correcta no corresponde a la lista de opciones.';
+    end if;
+    if p_explicacion is null or btrim(p_explicacion) = '' then
+        raise exception 'La actividad necesita su explicación.';
+    end if;
+
+    if p_orden is null then
+        select coalesce(max(orden) + 1, 0)::integer into v_orden
+        from preguntas where leccion_id = p_leccion_id;
+    else
+        v_orden := p_orden;
+    end if;
+
+    insert into preguntas (leccion_id, enunciado, tipo, orden, estado_publicacion)
+    values (p_leccion_id, p_enunciado, 'seleccion', v_orden, 'borrador')
+    returning id into v_pregunta;
+
+    v_indice := 0;
+    for v_texto in select elem::text from jsonb_array_elements_text(p_opciones) as elem
+    loop
+        if btrim(v_texto) = '' then
+            raise exception 'Las opciones no pueden tener texto vacio.';
+        end if;
+
+        insert into opciones (pregunta_id, texto, orden)
+        values (v_pregunta, btrim(v_texto), v_indice)
+        returning id into v_opciones_ids[v_indice + 1];
+
+        v_indice := v_indice + 1;
+    end loop;
+
+    insert into soluciones (pregunta_id, opcion_correcta_id, explicacion)
+    values (
+        v_pregunta,
+        v_opciones_ids[p_indice_correcta + 1],
+        p_explicacion
+    );
+
+    return v_pregunta;
+end;
+$$;
+
+create or replace function expotec_admin_guardar_opcion(
+    p_id uuid,
+    p_datos jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_id uuid;
+    v_pregunta uuid;
+    v_orden integer;
+begin
+    perform expotec_guard_admin();
+
+    if p_id is null then
+        if p_datos is null or p_datos ->> 'pregunta_id' is null then
+            raise exception 'La opción necesita la actividad a la que pertenece.';
+        end if;
+        select coalesce(p_datos ->> 'pregunta_id', '')::uuid into v_pregunta;
+        if not exists (select 1 from preguntas where id = v_pregunta) then
+            raise exception 'La actividad no existe.';
+        end if;
+
+        select coalesce(max(orden) + 1, 0)::integer into v_orden
+        from opciones where pregunta_id = v_pregunta;
+
+        insert into opciones (pregunta_id, texto, orden)
+        values (
+            v_pregunta,
+            coalesce(btrim(p_datos ->> 'texto'), 'Nueva opción'),
+            coalesce((p_datos ->> 'orden')::integer, v_orden)
+        )
+        returning id into v_id;
+
+        return v_id;
+    end if;
+
+    update opciones
+    set
+        texto = case when p_datos ? 'texto' then coalesce(btrim(p_datos ->> 'texto'), texto) else texto end,
+        orden = case when p_datos ? 'orden' then coalesce((p_datos ->> 'orden')::integer, 0) else orden end
+    where id = p_id
+    returning id, pregunta_id into v_id, v_pregunta;
+
+    if v_id is null then
+        raise exception 'La opción no existe.';
+    end if;
+
+    return v_id;
+end;
+$$;
+
+-- Upsert de la solucion de una actividad de seleccion: la opcion correcta debe
+-- pertenecer a la pregunta y la explicacion no puede estar vacia.
+create or replace function expotec_admin_definir_solucion(
+    p_pregunta_id uuid,
+    p_opcion_id uuid,
+    p_explicacion text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    perform expotec_guard_admin();
+
+    if not exists (select 1 from preguntas where id = p_pregunta_id) then
+        raise exception 'La actividad no existe.';
+    end if;
+    if p_opcion_id is null
+       or not exists (
+            select 1 from opciones
+            where id = p_opcion_id and pregunta_id = p_pregunta_id
+       ) then
+        raise exception 'La opción correcta debe pertenecer a la actividad.';
+    end if;
+    if p_explicacion is null or btrim(p_explicacion) = '' then
+        raise exception 'La explicación de la solución no puede estar vacía.';
+    end if;
+
+    insert into soluciones (pregunta_id, opcion_correcta_id, explicacion)
+    values (p_pregunta_id, p_opcion_id, p_explicacion)
+    on conflict (pregunta_id) do update
+        set opcion_correcta_id = excluded.opcion_correcta_id,
+            explicacion = excluded.explicacion;
+end;
+$$;
+
+-- Cambio de estado de publicacion por tipo de contenido. Publicar valida el
+-- contenido: despublicar (borrador/oculto) es libre.
+create or replace function expotec_admin_cambiar_estado_contenido(
+    p_tipo text,
+    p_id uuid,
+    p_estado text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_inconveniente text;
+begin
+    perform expotec_guard_admin();
+
+    if p_estado not in ('borrador', 'publicado', 'oculto', 'oculta', 'bloqueada') then
+        raise exception 'El estado solicitado no es valido.';
+    end if;
+
+    if p_tipo = 'curso' then
+        if p_estado not in ('borrador', 'publicado', 'oculto') then
+            raise exception 'El curso no admite ese estado.';
+        end if;
+        if p_estado = 'publicado' then
+            v_inconveniente := expotec_inconveniente_curso(p_id);
+            if v_inconveniente is not null then
+                raise exception '%', v_inconveniente;
+            end if;
+        end if;
+        update cursos set estado_publicacion = p_estado where id = p_id;
+    elsif p_tipo = 'unidad' then
+        if p_estado not in ('borrador', 'publicado', 'oculta', 'bloqueada') then
+            raise exception 'La unidad no admite ese estado.';
+        end if;
+        if p_estado = 'publicado' then
+            v_inconveniente := expotec_inconveniente_unidad(p_id);
+            if v_inconveniente is not null then
+                raise exception '%', v_inconveniente;
+            end if;
+        end if;
+        update unidades set estado_publicacion = p_estado where id = p_id;
+    elsif p_tipo = 'leccion' then
+        if p_estado not in ('borrador', 'publicado', 'oculta', 'bloqueada') then
+            raise exception 'La clase no admite ese estado.';
+        end if;
+        if p_estado = 'publicado' then
+            v_inconveniente := expotec_inconveniente_leccion(p_id);
+            if v_inconveniente is not null then
+                raise exception '%', v_inconveniente;
+            end if;
+        end if;
+        update lecciones set estado_publicacion = p_estado where id = p_id;
+    elsif p_tipo = 'pregunta' then
+        if p_estado not in ('borrador', 'publicado', 'oculta') then
+            raise exception 'La actividad no admite ese estado.';
+        end if;
+        if p_estado = 'publicado' then
+            v_inconveniente := expotec_inconveniente_pregunta(p_id);
+            if v_inconveniente is not null then
+                raise exception '%', v_inconveniente;
+            end if;
+        end if;
+        update preguntas set estado_publicacion = p_estado where id = p_id;
+    else
+        raise exception 'El tipo de contenido no existe.';
+    end if;
+
+    if not found then
+        raise exception 'El contenido solicitado no existe.';
+    end if;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 8.3 Gestion de eventos
+--
+-- La unidad de competencia es el evento. Las reglas de transicion de estado
+-- son estrictas: borrador -> programado -> activo -> cerrado. Activar exige el
+-- desafio configurado y completo, y lo congela contra cambios.
+-- ---------------------------------------------------------------------------
+
+-- Un evento puede editarse mientras sea borrador o programado. Con partidas
+-- en juego ya nada se toca tampoco: el desafio quedo congelado.
+create or replace function expotec_evento_editable(p_evento_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_estado text;
+begin
+    if p_evento_id is null then
+        return 'Falta el evento.';
+    end if;
+
+    select estado into v_estado
+    from expotec_eventos where id = p_evento_id;
+
+    if v_estado is null then
+        return 'El evento no existe.';
+    end if;
+
+    if v_estado in ('activo', 'cerrado') then
+        return 'El evento ya no admite cambios en su etapa ' || v_estado || '.';
+    end if;
+
+    return null;
+end;
+$$;
+
+create or replace function expotec_admin_crear_evento(
+    p_nombre text,
+    p_descripcion text default null,
+    p_fecha_inicio timestamptz default null,
+    p_fecha_fin timestamptz default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_id uuid;
+begin
+    perform expotec_guard_admin();
+
+    if p_nombre is null or btrim(p_nombre) = '' then
+        raise exception 'El evento necesita un nombre.';
+    end if;
+    if length(btrim(p_nombre)) > 120 then
+        raise exception 'El nombre del evento no puede superar 120 caracteres.';
+    end if;
+    if p_fecha_inicio is not null and p_fecha_fin is not null
+       and p_fecha_inicio > p_fecha_fin then
+        raise exception 'La fecha de inicio no puede ser posterior a la fecha de cierre.';
+    end if;
+
+    insert into expotec_eventos (nombre, descripcion, fecha_inicio, fecha_fin, estado)
+    values (btrim(p_nombre), p_descripcion, p_fecha_inicio, p_fecha_fin, 'borrador')
+    returning id into v_id;
+
+    return v_id;
+end;
+$$;
+
+create or replace function expotec_admin_actualizar_evento(
+    p_evento_id uuid,
+    p_datos jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_inconveniente text;
+    v_inicio timestamptz;
+    v_fin timestamptz;
+begin
+    perform expotec_guard_admin();
+
+    v_inconveniente := expotec_evento_editable(p_evento_id);
+    if v_inconveniente is not null then
+        raise exception '%', v_inconveniente;
+    end if;
+
+    if p_datos is null then
+        raise exception 'Faltan los datos del evento.';
+    end if;
+
+    -- Las fechas vigentes se usan como base cuando solo cambia una de ellas.
+    select min(e.fecha_inicio), max(e.fecha_fin)
+    into v_inicio, v_fin
+    from expotec_eventos e
+    where e.id = p_evento_id;
+
+    if p_datos ? 'fecha_inicio' then
+        v_inicio := (p_datos ->> 'fecha_inicio')::timestamptz;
+    end if;
+    if p_datos ? 'fecha_fin' then
+        v_fin := (p_datos ->> 'fecha_fin')::timestamptz;
+    end if;
+
+    if v_inicio is not null and v_fin is not null and v_inicio > v_fin then
+        raise exception 'La fecha de inicio no puede ser posterior a la fecha de cierre.';
+    end if;
+
+    update expotec_eventos
+    set
+        nombre = case
+            when p_datos ? 'nombre' then btrim(p_datos ->> 'nombre')
+            else nombre
+        end,
+        descripcion = case
+            when p_datos ? 'descripcion' then p_datos ->> 'descripcion'
+            else descripcion
+        end,
+        fecha_inicio = case when p_datos ? 'fecha_inicio' then v_inicio else fecha_inicio end,
+        fecha_fin = case when p_datos ? 'fecha_fin' then v_fin else fecha_fin end,
+        updated_at = now()
+    where id = p_evento_id;
+
+    if not found then
+        raise exception 'El evento no existe.';
+    end if;
+end;
+$$;
+
+create or replace function expotec_admin_cambiar_estado_evento(
+    p_evento_id uuid,
+    p_estado text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_actual text;
+    v_inconveniente text;
+    v_desafio uuid;
+begin
+    perform expotec_guard_admin();
+
+    if p_estado not in ('borrador', 'programado', 'activo', 'cerrado') then
+        raise exception 'El estado del evento no es valido.';
+    end if;
+
+    select estado into v_actual
+    from expotec_eventos where id = p_evento_id;
+
+    if v_actual is null then
+        raise exception 'El evento no existe.';
+    end if;
+
+    if v_actual = p_estado then
+        raise exception 'El evento ya se encuentra en ese estado.';
+    end if;
+
+    -- Transiciones permitidas y unica via: borrador -> programado -> activo ->
+    -- cerrado. No se vuelve atras ni se salta etapas.
+    if not (
+        (v_actual = 'borrador' and p_estado = 'programado')
+        or (v_actual = 'programado' and p_estado = 'activo')
+        or (v_actual = 'activo' and p_estado = 'cerrado')
+    ) then
+        raise exception 'El evento no puede pasar de % a %.', v_actual, p_estado;
+    end if;
+
+    if p_estado = 'activo' then
+        select id into v_desafio
+        from expotec_desafios
+        where evento_id = p_evento_id;
+
+        v_inconveniente := expotec_inconveniente_desafio(v_desafio);
+        if v_inconveniente is not null then
+            raise exception '%', v_inconveniente;
+        end if;
+
+        update expotec_desafios
+        set congelado_en = coalesce(congelado_en, now())
+        where id = v_desafio;
+    end if;
+
+    update expotec_eventos
+    set estado = p_estado,
+        updated_at = now()
+    where id = p_evento_id;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 8.4 Configuracion del desafio
+--
+-- El desafio solo se configura mientras no existan partidas (el desafio
+-- congelado con su primera partida). p_preguntas es la lista ordenada de uuid
+-- de actividades tipo seleccion; las que superen la cantidad configurada se
+-- descartan al azar en el servidor, por partida, en el momento de iniciar.
+-- ---------------------------------------------------------------------------
+
+create or replace function expotec_admin_configurar_desafio(
+    p_evento_id uuid,
+    p_params jsonb,
+    p_preguntas uuid[]
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_desafio_id uuid;
+    v_actual record;
+    v_pregunta uuid;
+    v_inconveniente text;
+    v_cantidad integer;
+    v_puntos integer;
+    v_tiempo integer;
+    v_duracion integer;
+    v_vidas integer;
+    v_intentos integer;
+    v_habilitadas integer;
+begin
+    perform expotec_guard_admin();
+
+    if p_evento_id is null
+       or not exists (select 1 from expotec_eventos where id = p_evento_id) then
+        raise exception 'El evento no existe.';
+    end if;
+
+    select * into v_actual from expotec_desafios where evento_id = p_evento_id;
+
+    if v_actual.id is not null
+       and (v_actual.congelado_en is not null
+            or exists (select 1 from expotec_partidas where desafio_id = v_actual.id)) then
+        raise exception 'El desafío ya está en juego: quedó congelado para proteger a los participantes.';
+    end if;
+
+    -- Valores: los vigentes (o el default) cuando el admin no envió el campo.
+    v_cantidad := coalesce(
+        (p_params ->> 'cantidad_preguntas')::integer,
+        v_actual.cantidad_preguntas, 10
+    );
+    v_puntos := coalesce(
+        (p_params ->> 'puntos_por_correcta')::integer,
+        v_actual.puntos_por_correcta, 100
+    );
+    v_tiempo := coalesce(
+        (p_params ->> 'tiempo_cuestionario_seg')::integer,
+        case when p_params is not null and p_params ? 'tiempo_cuestionario_seg'
+             then null::integer
+             else v_actual.tiempo_cuestionario_seg end
+    );
+    v_duracion := coalesce(
+        (p_params ->> 'duracion_juego_seg')::integer,
+        v_actual.duracion_juego_seg, 180
+    );
+    v_vidas := coalesce(
+        (p_params ->> 'vidas_juego')::integer,
+        v_actual.vidas_juego, 3
+    );
+    v_intentos := coalesce(
+        (p_params ->> 'intentos_permitidos')::integer,
+        v_actual.intentos_permitidos, 1
+    );
+
+    if not (v_cantidad between 1 and 50) then
+        raise exception 'El desafío debe tener entre 1 y 50 preguntas.';
+    end if;
+    if not (v_puntos between 1 and 10000) then
+        raise exception 'El puntaje por acierto debe estar entre 1 y 10000.';
+    end if;
+    if v_tiempo is not null and not (v_tiempo between 30 and 7200) then
+        raise exception 'El tiempo del cuestionario debe estar entre 30 y 7200 segundos.';
+    end if;
+    if not (v_duracion between 20 and 900) then
+        raise exception 'La duración del juego debe estar entre 20 y 900 segundos.';
+    end if;
+    if not (v_vidas between 1 and 10) then
+        raise exception 'Las vidas deben ser entre 1 y 10.';
+    end if;
+    if not (v_intentos between 1 and 20) then
+        raise exception 'Los intentos permitidos deben ser entre 1 y 20.';
+    end if;
+
+    if p_preguntas is null or array_length(p_preguntas, 1) is null then
+        raise exception 'El desafío necesita su lista de preguntas.';
+    end if;
+
+    v_habilitadas := 0;
+    foreach v_pregunta in array array(select distinct x from unnest(p_preguntas) x)
+    loop
+        if not exists (
+            select 1 from preguntas
+            where id = v_pregunta
+              and tipo = 'seleccion'
+              and estado_publicacion in ('publicado', 'borrador')
+        ) then
+            raise exception 'Hay preguntas que no habilitan: falta alguna, está oculta o no son de selección.';
+        end if;
+
+        v_inconveniente := expotec_inconveniente_pregunta(v_pregunta);
+        if v_inconveniente is not null then
+            raise exception 'Pregunta [%]: %', left(v_pregunta::text, 8), v_inconveniente;
+        end if;
+
+        v_habilitadas := v_habilitadas + 1;
+    end loop;
+
+    if v_habilitadas < v_cantidad then
+        raise exception 'Configuraste % preguntas para un desafío de %.',
+            v_habilitadas, v_cantidad;
+    end if;
+
+    if v_actual.id is null then
+        insert into expotec_desafios (
+            evento_id, nombre, version, cantidad_preguntas, puntos_por_correcta,
+            tiempo_cuestionario_seg, duracion_juego_seg, vidas_juego,
+            intentos_permitidos, mostrar_soluciones
+        ) values (
+            p_evento_id,
+            coalesce(p_params ->> 'nombre', 'Desafío ExpoTécnica'),
+            coalesce((p_params ->> 'version')::integer, 1),
+            v_cantidad, v_puntos, v_tiempo, v_duracion, v_vidas, v_intentos,
+            coalesce((p_params ->> 'mostrar_soluciones')::boolean, true)
+        )
+        returning id into v_desafio_id;
+    else
+        update expotec_desafios
+        set
+            nombre = coalesce(p_params ->> 'nombre', nombre),
+            version = coalesce((p_params ->> 'version')::integer, version),
+            cantidad_preguntas = v_cantidad,
+            puntos_por_correcta = v_puntos,
+            tiempo_cuestionario_seg = v_tiempo,
+            duracion_juego_seg = v_duracion,
+            vidas_juego = v_vidas,
+            intentos_permitidos = v_intentos,
+            mostrar_soluciones = coalesce(
+                (p_params ->> 'mostrar_soluciones')::boolean,
+                mostrar_soluciones
+            )
+        where id = v_actual.id
+        returning id into v_desafio_id;
+    end if;
+
+    -- Reordenado limpio del conjunto: borrado previo (el desafio no tiene
+    -- partidas en este punto) y alta con orden secuencial.
+    delete from expotec_desafio_preguntas where desafio_id = v_desafio_id;
+
+    insert into expotec_desafio_preguntas (desafio_id, pregunta_id, orden)
+    select v_desafio_id, p_preguntas[i], i - 1
+    from generate_series(1, array_length(p_preguntas, 1)) as i;
+
+    return v_desafio_id;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 8.5 Estadisticas y resultados para el panel
+-- ---------------------------------------------------------------------------
+
+create or replace function expotec_admin_estadisticas_evento(p_evento_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_resultado jsonb;
+begin
+    perform expotec_guard_admin();
+
+    if p_evento_id is null
+       or not exists (select 1 from expotec_eventos where id = p_evento_id) then
+        raise exception 'El evento no existe.';
+    end if;
+
+    select jsonb_build_object(
+        'participantes', (select count(*)::integer from expotec_participantes
+                            where evento_id = p_evento_id),
+        'partidas', (select count(*)::integer from expotec_partidas
+                       where evento_id = p_evento_id),
+        'por_estado', coalesce((
+            select jsonb_object_agg(estado, cuenta)
+            from (
+                select estado, count(*)::integer cuenta
+                from expotec_partidas
+                where evento_id = p_evento_id
+                group by estado
+            ) e
+        ), '{}'::jsonb),
+        'resultados_publicados', (select count(*)::integer
+            from expotec_resultados_publicos where evento_id = p_evento_id),
+        'puntaje_promedio', (select round(avg(puntaje_total)::numeric, 2)
+            from expotec_resultados_publicos where evento_id = p_evento_id),
+        'acierto_promedio', (select round(
+            100.0 * sum(correctas) / nullif(sum(correctas + incorrectas), 0),
+            1)::numeric
+            from expotec_resultados_publicos where evento_id = p_evento_id),
+        'tiempo_cuestionario_promedio', (select round(avg(tiempo_cuestionario_seg)::numeric, 2)
+            from expotec_resultados_publicos
+            where evento_id = p_evento_id
+              and tiempo_cuestionario_seg is not null)
+    ) into v_resultado;
+
+    return v_resultado;
+end;
+$$;
+
+-- Partidas del evento con sus datos compactos para tablas del panel.
+create or replace function expotec_admin_resultados_evento(
+    p_evento_id uuid,
+    p_estado text default null,
+    p_limite integer default 100
+)
+returns table (
+    partida_id uuid,
+    alias varchar,
+    estado varchar,
+    respondidas integer,
+    correctas integer,
+    incorrectas integer,
+    puntaje_cuestionario integer,
+    puntaje_juego integer,
+    puntaje_total integer,
+    tiempo_cuestionario_seg numeric,
+    iniciado_at timestamptz,
+    finalizado_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    -- En funciones language sql no existe perform: el guard se invoca con
+    -- select y devuelve error a quien no es administrador.
+    select expotec_guard_admin();
+
+    select
+        p.id, p.alias, p.estado,
+        p.respondidas, p.correctas, p.incorrectas,
+        p.puntaje_cuestionario, p.puntaje_juego, p.puntaje_total,
+        p.tiempo_cuestionario_seg, p.iniciado_at, p.finalizado_at
+    from expotec_partidas p
+    where p.evento_id = p_evento_id
+      and (p_estado is null or p.estado = p_estado)
+    order by p.iniciado_at desc
+    limit least(coalesce(p_limite, 100), 500);
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 9. Grants de ejecucion
+--
+-- Supabase concede EXECUTE a PUBLIC por defecto en cada funcion nueva, asi
+-- que cada RPC relevante recibe revoke de PUBLIC y grant solo a los roles que
+-- la van a llamar desde la app. Los helpers internos no quedan ejecutables
+-- desde el cliente.
+-- ---------------------------------------------------------------------------
+
+revoke all on function expotec_evento_activo() from public;
+grant execute on function expotec_evento_activo() to anon, authenticated;
+
+revoke all on function expotec_alias_disponible(uuid, text) from public;
+grant execute on function expotec_alias_disponible(uuid, text) to anon, authenticated;
+
+revoke all on function expotec_iniciar_partida(uuid, text) from public;
+grant execute on function expotec_iniciar_partida(uuid, text) to authenticated;
+
+revoke all on function expotec_estado_partida(uuid) from public;
+grant execute on function expotec_estado_partida(uuid) to authenticated;
+
+revoke all on function expotec_responder(uuid, uuid, uuid) from public;
+grant execute on function expotec_responder(uuid, uuid, uuid) to authenticated;
+
+revoke all on function expotec_iniciar_juego(uuid) from public;
+grant execute on function expotec_iniciar_juego(uuid) to authenticated;
+
+revoke all on function expotec_checkpoint_juego(uuid, jsonb) from public;
+grant execute on function expotec_checkpoint_juego(uuid, jsonb) to authenticated;
+
+revoke all on function expotec_finalizar_juego(uuid, integer, integer, numeric, jsonb) from public;
+grant execute on function expotec_finalizar_juego(uuid, integer, integer, numeric, jsonb)
+    to authenticated;
+
+revoke all on function expotec_abandonar(uuid) from public;
+grant execute on function expotec_abandonar(uuid) to authenticated;
+
+revoke all on function expotec_obtener_soluciones(uuid) from public;
+grant execute on function expotec_obtener_soluciones(uuid) to authenticated;
+
+revoke all on function expotec_mis_partidas(uuid) from public;
+grant execute on function expotec_mis_partidas(uuid) to authenticated;
+
+revoke all on function expotec_resultado_propio(uuid) from public;
+grant execute on function expotec_resultado_propio(uuid) to authenticated;
+
+revoke all on function expotec_ranking(uuid, integer) from public;
+grant execute on function expotec_ranking(uuid, integer) to anon, authenticated;
+
+-- Panel de administracion: todos autenticados pueden ejecutarlas, el guard
+-- interno distingue a los administradores y devuelve error al resto.
+revoke all on function expotec_admin_es_admin() from public;
+grant execute on function expotec_admin_es_admin() to authenticated;
+
+revoke all on function expotec_admin_guardar_curso(uuid, jsonb) from public;
+grant execute on function expotec_admin_guardar_curso(uuid, jsonb) to authenticated;
+
+revoke all on function expotec_admin_guardar_unidad(uuid, jsonb) from public;
+grant execute on function expotec_admin_guardar_unidad(uuid, jsonb) to authenticated;
+
+revoke all on function expotec_admin_guardar_leccion(uuid, jsonb) from public;
+grant execute on function expotec_admin_guardar_leccion(uuid, jsonb) to authenticated;
+
+revoke all on function expotec_admin_guardar_pregunta(uuid, jsonb) from public;
+grant execute on function expotec_admin_guardar_pregunta(uuid, jsonb) to authenticated;
+
+revoke all on function expotec_admin_crear_pregunta_completa(uuid, text, jsonb, integer, text, integer) from public;
+grant execute on function expotec_admin_crear_pregunta_completa(uuid, text, jsonb, integer, text, integer)
+    to authenticated;
+
+revoke all on function expotec_admin_guardar_opcion(uuid, jsonb) from public;
+grant execute on function expotec_admin_guardar_opcion(uuid, jsonb) to authenticated;
+
+revoke all on function expotec_admin_definir_solucion(uuid, uuid, text) from public;
+grant execute on function expotec_admin_definir_solucion(uuid, uuid, text) to authenticated;
+
+revoke all on function expotec_admin_cambiar_estado_contenido(text, uuid, text) from public;
+grant execute on function expotec_admin_cambiar_estado_contenido(text, uuid, text) to authenticated;
+
+revoke all on function expotec_admin_crear_evento(text, text, timestamptz, timestamptz) from public;
+grant execute on function expotec_admin_crear_evento(text, text, timestamptz, timestamptz)
+    to authenticated;
+
+revoke all on function expotec_admin_actualizar_evento(uuid, jsonb) from public;
+grant execute on function expotec_admin_actualizar_evento(uuid, jsonb) to authenticated;
+
+revoke all on function expotec_admin_cambiar_estado_evento(uuid, text) from public;
+grant execute on function expotec_admin_cambiar_estado_evento(uuid, text) to authenticated;
+
+revoke all on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[]) from public;
+grant execute on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[])
+    to authenticated;
+
+revoke all on function expotec_admin_estadisticas_evento(uuid) from public;
+grant execute on function expotec_admin_estadisticas_evento(uuid) to authenticated;
+
+revoke all on function expotec_admin_resultados_evento(uuid, text, integer) from public;
+grant execute on function expotec_admin_resultados_evento(uuid, text, integer)
+    to authenticated;
+
+-- Helpers internos: solo los consumen las demas funciones del servidor.
+revoke all on function expotec_alias_normalizado(text) from public;
+revoke all on function expotec_alias_inconveniente(text) from public;
+revoke all on function expotec_evento_ventana_abierta(uuid) from public;
+revoke all on function expotec_desafio_congelado(uuid) from public;
+revoke all on function expotec_registrar_participante(uuid, text) from public;
+revoke all on function expotec_intentos_gastados(uuid, uuid) from public;
+revoke all on function expotec_progreso_partida_jsonb(uuid, boolean) from public;
+revoke all on function expotec_tope_destruidos(numeric) from public;
+revoke all on function expotec_guard_admin() from public;
+revoke all on function expotec_inconveniente_pregunta(uuid) from public;
+revoke all on function expotec_inconveniente_leccion(uuid) from public;
+revoke all on function expotec_inconveniente_unidad(uuid) from public;
+revoke all on function expotec_inconveniente_curso(uuid) from public;
+revoke all on function expotec_inconveniente_desafio(uuid) from public;
+revoke all on function expotec_evento_editable(uuid) from public;
+
+-- ---------------------------------------------------------------------------
+-- 10. Datos iniciales
+--
+-- Evento y desafio listos para ExpoTecncia 2026, mas un curso interno oculto
+-- con la unidad, la clase y las 10 actividades del cuestionario. Todos los
+-- ids son deterministas para poder volver a correr el script.
+--
+-- Alta de administradores (manual, desde el dashboard):
+--
+--     insert into expotec_admins (usuario_id)
+--     values ('<uuid del perfil>')
+--     on conflict (usuario_id) do nothing;
+-- ---------------------------------------------------------------------------
+
+insert into cursos (id, nombre, descripcion, lema, monograma, logo, color_acento, orden, estado_publicacion)
+values (
+    uuid(md5('kodigo:curso:expotec')),
+    'Preparación ExpoTécnica',
+    'Contenido interno con las actividades del cuestionario competitivo de la ExpoTécnica. No se publica en el catálogo.',
+    'El camino hacia la ExpoTécnica',
+    'EXP',
+    null,
+    '#700b97',
+    0,
+    'oculto'
+)
+on conflict (id) do nothing;
+
+insert into unidades (id, curso_id, nombre, descripcion, orden, estado_publicacion)
+values (
+    uuid(md5('kodigo:unidad:expotec:u01')),
+    uuid(md5('kodigo:curso:expotec')),
+    'Cuestionario ExpoTécnica',
+    'Las actividades que el desafío, la competencia, sortea cada partida.',
+    0,
+    'oculta'
+)
+on conflict (id) do nothing;
+
+insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion)
+values (
+    uuid(md5('kodigo:leccion:expotec:l01')),
+    uuid(md5('kodigo:unidad:expotec:u01')),
+    'JavaScript para el desafío',
+    'Repaso de los conceptos que se tocan en el cuestionario: operadores, tipos, arrays, funciones y objetos. Cada partida elige 10 actividades y mezcla sus opciones.',
+    '// Un repaso rapido
+const limite = 10;
+const puntos = limite * 100;
+const [a, b] = [1, "2"];
+// 1 + "2" es "12": concatena cuando hay textos',
+    0,
+    'oculta'
+)
+on conflict (id) do nothing;
+
+insert into preguntas (id, leccion_id, enunciado, tipo, orden, estado_publicacion)
+select
+    uuid(md5('kodigo:preg:expo:' || v.clave)),
+    uuid(md5('kodigo:leccion:expotec:l01')),
+    v.enunciado,
+    'seleccion',
+    v.orden,
+    'publicado'
+from (values
+    ('q01', '¿Qué devuelve 2 + "2" en JavaScript?', 0),
+    ('q02', '¿Qué palabra clave crea una variable que no se puede reasignar?', 1),
+    ('q03', '¿Qué texto imprime typeof [] en la consola?', 2),
+    ('q04', '¿Qué operador compara valor y tipo sin hacer conversiones?', 3),
+    ('q05', '¿Qué devuelve [1, 2, 3].map(x => x * 2)?', 4),
+    ('q06', '¿Qué método agrega un elemento al final de un array?', 5),
+    ('q07', '¿Cómo se escribe una función flecha que devuelve x al cuadrado?', 6),
+    ('q08', '¿Qué hace break dentro de un switch?', 7),
+    ('q09', '¿Cómo se define un parámetro con valor por defecto en una función?', 8),
+    ('q10', '¿Qué estructura repite su código mientras la condición sea verdadera?', 9)
+) as v(clave, enunciado, orden)
+on conflict (id) do nothing;
+
+insert into opciones (id, pregunta_id, texto, orden)
+select
+    uuid(md5('kodigo:opt:expo:' || v.clave)),
+    uuid(md5('kodigo:preg:expo:' || v.clave_preg)),
+    v.texto,
+    v.orden
+from (values
+    ('q01:o0', 'q01', 'El texto "22"', 0),
+    ('q01:o1', 'q01', 'El número 4', 1),
+    ('q01:o2', 'q01', 'NaN', 2),
+    ('q01:o3', 'q01', 'Lanza un error de tipo', 3),
+    ('q02:o0', 'q02', 'const', 0),
+    ('q02:o1', 'q02', 'let', 1),
+    ('q02:o2', 'q02', 'var', 2),
+    ('q02:o3', 'q02', 'final', 3),
+    ('q03:o0', 'q03', '"object"', 0),
+    ('q03:o1', 'q03', '"array"', 1),
+    ('q03:o2', 'q03', '"list"', 2),
+    ('q03:o3', 'q03', 'Lanza un error', 3),
+    ('q04:o0', 'q04', '===', 0),
+    ('q04:o1', 'q04', '==', 1),
+    ('q04:o2', 'q04', '=', 2),
+    ('q04:o3', 'q04', '=>', 3),
+    ('q05:o0', 'q05', 'El array [2, 4, 6]', 0),
+    ('q05:o1', 'q05', 'El array original sin cambios', 1),
+    ('q05:o2', 'q05', 'undefined', 2),
+    ('q05:o3', 'q05', 'El número 6', 3),
+    ('q06:o0', 'q06', 'push()', 0),
+    ('q06:o1', 'q06', 'pop()', 1),
+    ('q06:o2', 'q06', 'shift()', 2),
+    ('q06:o3', 'q06', 'join()', 3),
+    ('q07:o0', 'q07', 'x => x * x', 0),
+    ('q07:o1', 'q07', 'function x * x', 1),
+    ('q07:o2', 'q07', 'lambda(x) { x * x }', 2),
+    ('q07:o3', 'q07', 'arrow(x) x * x', 3),
+    ('q08:o0', 'q08', 'Termina el bloque switch', 0),
+    ('q08:o1', 'q08', 'Continúa con el siguiente case', 1),
+    ('q08:o2', 'q08', 'Reinicia el switch desde el principio', 2),
+    ('q08:o3', 'q08', 'Lanza un error', 3),
+    ('q09:o0', 'q09', 'function f(a = 5)', 0),
+    ('q09:o1', 'q09', 'function f(a == 5)', 1),
+    ('q09:o2', 'q09', 'function f(a -> 5)', 2),
+    ('q09:o3', 'q09', 'function f(a: 5)', 3),
+    ('q10:o0', 'q10', 'while', 0),
+    ('q10:o1', 'q10', 'if', 1),
+    ('q10:o2', 'q10', 'switch', 2),
+    ('q10:o3', 'q10', 'try', 3)
+) as v(clave, clave_preg, texto, orden)
+on conflict (id) do nothing;
+
+insert into soluciones (id, pregunta_id, opcion_correcta_id, explicacion)
+select
+    uuid(md5('kodigo:sol:expo:' || v.clave_preg)),
+    uuid(md5('kodigo:preg:expo:' || v.clave_preg)),
+    uuid(md5('kodigo:opt:expo:' || v.clave_opcion)),
+    v.explicacion
+from (values
+    ('q01', 'q01:o0', 'El operador + concatena cuando un valor es texto: número sobre texto da la cadena "22".'),
+    ('q02', 'q02:o0', 'const crea un enlace que no se puede reasignar; let y var sí lo permiten.'),
+    ('q03', 'q03:o0', 'Los arrays son objetos: typeof no distingue y devuelve "object".'),
+    ('q04', 'q04:o0', '=== compara valor y tipo; == hace conversiones antes de comparar y = es asignación.'),
+    ('q05', 'q05:o0', 'map devuelve un array nuevo con cada elemento transformado; el array original queda igual.'),
+    ('q06', 'q06:o0', 'push agrega al final; pop quita del final; shift quita del principio.'),
+    ('q07', 'q07:o0', 'La flecha => desarrolla la función y su cuerpo es el valor devuelto.'),
+    ('q08', 'q08:o0', 'break corta la ejecución del switch; sin break, cae en el siguiente case.'),
+    ('q09', 'q09:o0', 'El valor por defecto se asigna con = en la firma: function f(a = 5).'),
+    ('q10', 'q10:o0', 'while repite su bloque mientras la condición siga siendo verdadera.')
+) as v(clave_preg, clave_opcion, explicacion)
+on conflict (pregunta_id) do nothing;
+
+insert into expotec_eventos (id, nombre, descripcion, fecha_inicio, fecha_fin, estado)
+values (
+    uuid(md5('kodigo:evento:expotec-2026')),
+    'ExpoTécnica 2026',
+    'El desafío competitivo de Kodigo: 10 preguntas de JavaScript y una partida de Core Defender para quedarse con el podio.',
+    null,
+    null,
+    'activo'
+)
+on conflict (id) do nothing;
+
+insert into expotec_desafios (
+    evento_id, nombre, version, cantidad_preguntas, puntos_por_correcta,
+    tiempo_cuestionario_seg, duracion_juego_seg, vidas_juego,
+    intentos_permitidos, mostrar_soluciones
+)
+select
+    e.id,
+    'Desafío ExpoTécnica 2026',
+    1,
+    10,
+    100,
+    900,
+    180,
+    3,
+    1,
+    true
+from expotec_eventos e
+where e.id = uuid(md5('kodigo:evento:expotec-2026'))
+on conflict (evento_id) do nothing;
+
+insert into expotec_desafio_preguntas (desafio_id, pregunta_id, orden)
+select
+    d.id,
+    q.id,
+    v.orden
+from (values
+    ('q01', 0), ('q02', 1), ('q03', 2), ('q04', 3), ('q05', 4),
+    ('q06', 5), ('q07', 6), ('q08', 7), ('q09', 8), ('q10', 9)
+) as v(clave, orden)
+join expotec_desafios d
+    on d.evento_id = uuid(md5('kodigo:evento:expotec-2026'))
+join preguntas q
+    on q.id = uuid(md5('kodigo:preg:expo:' || v.clave))
+on conflict (desafio_id, pregunta_id) do nothing;

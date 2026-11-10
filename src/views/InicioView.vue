@@ -47,6 +47,19 @@
           </button>
         </section>
 
+        <!-- Tarjeta del Desafio ExpoTecnica: solo si hay un evento activo. -->
+        <section v-if="eventoActivo" class="home-seccion">
+          <p class="home-seccion-titulo">Evento Especial</p>
+          <button type="button" class="tarjeta-continuar tarjeta-desafio" @click="irAlDesafio">
+            <FantasmaKodigo :size="46" class="desafio-ghost" />
+            <div class="continuar-datos">
+              <p class="continuar-titulo">Desafío ExpoTécnica</p>
+              <p class="continuar-subtitulo">{{ lemaDesafio }}</p>
+            </div>
+            <q-icon name="emoji_events" size="22px" class="continuar-play" />
+          </button>
+        </section>
+
         <section class="home-seccion">
           <p class="home-seccion-titulo">Cursos Sugeridos</p>
           <div class="home-sugeridos">
@@ -69,6 +82,7 @@ import { useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import LogoCurso from '@/components/LogoCurso.vue'
 import TarjetaCurso from '@/components/TarjetaCurso.vue'
+import FantasmaKodigo from '@/components/FantasmaKodigo.vue'
 import {
   aSlug,
   obtenerCursos,
@@ -77,6 +91,7 @@ import {
   rutaLeccion,
 } from '@/services/catalogo'
 import { estado as estadoAuth, usarAuth } from '@/services/auth'
+import { obtenerEventoActivo } from '@/services/expotecnica'
 
 const router = useRouter()
 const { estado } = usarAuth()
@@ -114,12 +129,22 @@ const mensajeProgreso = computed(() => {
 
 const sugeridos = computed(() => cursos.value.slice(0, 4))
 
+// El desafio es independiente del catalogo: si no hay evento activo la tarjeta
+// no aparece y el portal queda igual que siempre.
+const eventoActivo = ref(null)
+const lemaDesafio = computed(() => {
+  const d = eventoActivo.value?.desafio
+  if (!d) return 'El gran desafío competitivo de Kodigo'
+  return `${d.cantidadPreguntas} preguntas de JavaScript + Core Defender`
+})
+
 async function cargar() {
   estadoCarga.value = 'cargando'
   mensajeError.value = ''
   try {
-    const lista = await obtenerCursos()
+    const [lista, activo] = await Promise.all([obtenerCursos(), obtenerEventoActivoSilencioso()])
     cursos.value = lista
+    eventoActivo.value = activo
 
     const curso = lista[0]
     if (curso) {
@@ -139,6 +164,21 @@ async function cargar() {
 }
 
 onMounted(cargar)
+
+// El desafio es independiente del catalogo: si no hay evento activo la tarjeta
+// no aparece y el portal queda igual que siempre. La consulta no rompe el
+// portal: si falla, la tarjeta simplemente no se muestra.
+async function obtenerEventoActivoSilencioso() {
+  try {
+    return await obtenerEventoActivo()
+  } catch {
+    return null
+  }
+}
+
+function irAlDesafio() {
+  router.push('/expotecnica')
+}
 
 function continuarAprendiendo() {
   if (primeraLeccion.value && primeraUnidad.value) {
@@ -295,6 +335,32 @@ function abrirCurso(curso) {
 .continuar-play {
   color: var(--k-accent);
   flex-shrink: 0;
+}
+
+/* Tarjeta del Desafio ExpoTecnica: misma anatomia que continuar, gana acento */
+.tarjeta-desafio {
+  border-color: rgba(142, 5, 194, 0.45);
+  background: linear-gradient(160deg, rgba(142, 5, 194, 0.16), rgba(62, 6, 95, 0.5));
+}
+
+.tarjeta-desafio:hover,
+.tarjeta-desafio:active {
+  border-color: var(--k-accent);
+}
+
+.desafio-ghost {
+  flex-shrink: 0;
+  animation: desafio-flotar 2.2s ease-in-out infinite;
+}
+
+@keyframes desafio-flotar {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
 .home-sugeridos {

@@ -49,6 +49,15 @@
           <p class="curso-bloque-detalle">{{ progresoCurso }}% completado</p>
         </section>
 
+        <!-- Atajo al Desafio ExpoTecnica cuando se estudia JavaScript. -->
+        <section v-if="esCursoJavaScript && desafioActivo" class="curso-bloque curso-desafio">
+          <p class="curso-bloque-titulo">Evento Especial</p>
+          <button type="button" class="k-btn k-btn--primary k-btn--block" @click="irAlDesafio">
+            <q-icon name="emoji_events" size="18px" />
+            Ir al Desafío ExpoTécnica
+          </button>
+        </section>
+
         <section class="curso-bloque">
           <p class="curso-bloque-titulo">Unidades de Estudio</p>
 
@@ -103,6 +112,7 @@ import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import LogoCurso from '@/components/LogoCurso.vue'
 import { aSlug, obtenerUnidades, resolverCurso, rutaUnidad } from '@/services/catalogo'
 import { estado as estadoAuth, usarAuth } from '@/services/auth'
+import { obtenerEventoActivo } from '@/services/expotecnica'
 
 const route = useRoute()
 const router = useRouter()
@@ -115,6 +125,9 @@ const curso = ref(null)
 const unidades = ref([])
 
 const rachaDias = computed(() => estadoAuth.perfil?.racha_dias ?? 0)
+
+const esCursoJavaScript = computed(() => aSlug(curso.value?.nombre) === 'javascript')
+const desafioActivo = ref(false)
 
 const progresoCurso = computed(() => {
   if (!unidades.value.length) return 0
@@ -153,6 +166,15 @@ async function cargar() {
     unidades.value = dataUnidades
     estadoUnidades.value = dataUnidades.length ? 'listo' : 'vacio'
     estadoCarga.value = 'listo'
+
+    // El atajo al desafio solo aparece si hay evento activo; falla silenciosa.
+    if (esCursoJavaScript.value) {
+      try {
+        desafioActivo.value = Boolean(await obtenerEventoActivo())
+      } catch {
+        desafioActivo.value = false
+      }
+    }
   } catch (error) {
     mensajeError.value = error.message
     estadoCarga.value = 'error'
@@ -168,6 +190,10 @@ function abrirUnidad(unidadId) {
 
 function empezarAprendizaje() {
   if (unidadActual.value) abrirUnidad(unidadActual.value.id)
+}
+
+function irAlDesafio() {
+  router.push('/expotecnica')
 }
 
 function volver() {
@@ -349,5 +375,10 @@ function verCursos() {
 
 .curso-empezar {
   margin-top: var(--k-space-6);
+}
+
+/* Bloque del Desafio ExpoTecnica: mismo ritmo, borde con acento violeta */
+.curso-desafio .k-btn {
+  border: 1px solid rgba(142, 5, 194, 0.5);
 }
 </style>

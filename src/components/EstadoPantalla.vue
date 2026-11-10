@@ -46,17 +46,29 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  // Opcional: sobrescribe el eyebrow automatico por pantalla.
+  eyebrow: {
+    type: String,
+    default: '',
+  },
+  // Opcional: humor del fantasma (normal | happy | sad | bored).
+  variant: {
+    type: String,
+    default: '',
+  },
 })
 
 defineEmits(['accion'])
 
 const variant = computed(() => {
+  if (props.variant) return props.variant
   if (props.tipo === 'cargando') return 'normal'
   if (props.tipo === 'error') return 'sad'
   return 'normal'
 })
 
 const eyebrow = computed(() => {
+  if (props.eyebrow) return props.eyebrow
   const encabezados = {
     error: 'Ocurrió un problema',
     vacio: 'Sin contenido',

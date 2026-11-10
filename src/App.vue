@@ -20,6 +20,10 @@ const rutasSinNavegacion = [
   'ingreso',
   'recuperar',
   'restablecer',
+  // Desafío ExpoTécnica: durante la partida y en el panel no hay navegación.
+  'expotecnica-desafio',
+  'expotecnica-ranking',
+  'admin',
 ]
 
 const mostrarNavegacion = computed(
