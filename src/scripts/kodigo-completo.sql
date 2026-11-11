@@ -3782,7 +3782,7 @@ begin
         seleccionadas.posicion - 1,
         mezcladas.opciones
     from (
-        select dp.pregunta_id as id,
+        select pool.pregunta_id as id,
                row_number() over (order by random()) as posicion
         from (
             select dp2.pregunta_id
