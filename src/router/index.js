@@ -31,6 +31,11 @@ const rutas = [
     component: () => import('@/views/DiccionarioView.vue'),
   },
   {
+    path: '/ayuda',
+    name: 'ayuda',
+    component: () => import('@/views/AyudaView.vue'),
+  },
+  {
     path: '/mas',
     name: 'mas',
     component: () => import('@/views/MasView.vue'),

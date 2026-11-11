@@ -123,6 +123,7 @@ import {
   obtenerLecciones,
   obtenerLeccion,
   obtenerPreguntas,
+  obtenerHistorialLeccion,
   obtenerResultadosLeccion,
   obtenerUnidadPorId,
   resolverCurso,
@@ -181,9 +182,7 @@ const leccionSiguiente = computed(() => {
 const siguienteDisponible = computed(() => Boolean(leccionSiguiente.value))
 
 const linkUnidad = computed(() => {
-  if (unidad.value) {
-    return { name: 'unidad', params: { courseId: unidad.value.cursoId, unitId: unidad.value.id } }
-  }
+  if (unidad.value) return rutaUnidad(unidad.value, curso.value)
   return { name: 'cursos' }
 })
 
@@ -239,7 +238,11 @@ async function cargar() {
       // perfil muestren el valor persistido y no el anterior.
       await refrescarPerfil()
     } else {
-      resultados.value = obtenerResultadosLeccion(dataLeccion.id)
+      // Sin intento activo (por ejemplo, tras recargar la página): se toma el
+      // último intento registrado para mostrar su XP persistido.
+      const base = obtenerResultadosLeccion(dataLeccion.id)
+      const historial = await obtenerHistorialLeccion(dataLeccion.id).catch(() => [])
+      resultados.value = { ...base, xpGanado: historial[0]?.xpGanado ?? 0 }
     }
     estado.value = 'listo'
   } catch (error) {

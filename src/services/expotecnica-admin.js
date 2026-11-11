@@ -157,15 +157,30 @@ export async function listarPreguntasConOpciones(leccionId) {
 export async function listarSolucionesDeLeccion(leccionId) {
   const { data, error } = await supabase
     .from('soluciones')
-    .select('id, pregunta_id, opcion_correcta_id, explicacion, preguntas!inner(leccion_id)')
+    .select('id, pregunta_id, opcion_correcta_id, solucion, explicacion, preguntas!inner(leccion_id)')
     .eq('preguntas.leccion_id', leccionId)
   if (error) throw errorDe('listarSolucionesDeLeccion', error)
   return (data ?? []).map((s) => ({
     id: s.id,
     preguntaId: s.pregunta_id,
     opcionCorrectaId: s.opcion_correcta_id,
+    solucion: s.solucion ?? {},
     explicacion: s.explicacion,
   }))
+}
+
+/**
+ * Alta y edicion de una actividad de cualquier modalidad. El servidor valida
+ * la estructura, guarda en borrador y solo publica si la actividad esta
+ * completa. Las opciones no se pueden cambiar si ya hay respuestas.
+ */
+export async function guardarActividad(datos) {
+  const { data, error } = await supabase.rpc('expotec_admin_guardar_actividad', {
+    p_id: datos.id ?? null,
+    p_datos: datos,
+  })
+  if (error) throw errorDe('expotec_admin_guardar_actividad', error)
+  return data
 }
 
 /**

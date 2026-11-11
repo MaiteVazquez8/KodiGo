@@ -42,9 +42,9 @@
             <p class="perfil-stat-etiqueta">RACHA DE DÍAS</p>
             <p class="perfil-stat-valor">{{ perfil?.racha_dias ?? 0 }} Días Seguidos</p>
           </div>
-<div class="perfil-stat">
-        <p class="perfil-stat-etiqueta">CURSOS ACTIVOS</p>
-        <p class="perfil-stat-valor">{{ cursosActivos }}</p>
+           <div class="perfil-stat">
+        <p class="perfil-stat-etiqueta">CURSOS INICIADOS</p>
+        <p class="perfil-stat-valor">{{ cursosIniciados }}</p>
       </div>
       <div class="perfil-stat">
         <p class="perfil-stat-etiqueta">CLASES APROBADAS</p>
@@ -71,7 +71,7 @@
           </p>
           <ul v-else class="perfil-logros-lista">
             <li v-for="logro in logros" :key="logro.id" class="perfil-logro">
-              <q-icon name="emoji_events" size="20px" />
+              <q-icon :name="logro.icono || 'emoji_events'" size="20px" />
               <div>
                 <p class="perfil-logro-nombre">{{ logro.nombre }}</p>
                 <p class="perfil-logro-descripcion">{{ logro.descripcion }}</p>
@@ -98,7 +98,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
-import { obtenerCursos, obtenerResumenProgreso } from '@/services/catalogo'
+import { obtenerEstadisticas, obtenerLogros, obtenerResumenProgreso } from '@/services/catalogo'
 import { esInvitado, usarAuth } from '@/services/auth'
 
 const { estado } = usarAuth()
@@ -106,8 +106,8 @@ const { estado } = usarAuth()
 const esInvitadoActual = computed(() => esInvitado(estado.usuario))
 const perfil = computed(() => estado.perfil)
 
-const cursos = ref([])
 const logros = ref([])
+const cursosIniciados = ref(0)
 
 // Lecciones aprobadas e intentos: salen del progreso guardado en Supabase,
 // asi que se mantienen al recargar o entrar desde otro dispositivo.
@@ -123,16 +123,23 @@ const inicial = computed(() => (nombreVisible.value || 'K').charAt(0).toUpperCas
 
 const correoMostrado = computed(() => estado.usuario?.email || 'Sesión de invitado')
 
-const cursosActivos = computed(() => {
-  const nombres = cursos.value.map((curso) => curso.nombre).filter(Boolean)
-  return nombres.length ? nombres.join(', ') : '—'
-})
-
 onMounted(async () => {
+  // Cantidad real de cursos donde el usuario tiene al menos una lección
+  // intentada. La RPC de estadísticas la calcula desde progreso_lecciones.
   try {
-    cursos.value = await obtenerCursos()
+    const estadisticas = await obtenerEstadisticas()
+    cursosIniciados.value = Number(estadisticas?.cursos_iniciados ?? 0)
   } catch {
-    cursos.value = []
+    cursosIniciados.value = 0
+  }
+
+  // Logros reales del usuario. Si todavia no inicio sesion o la RPC falla,
+  // la seccion queda vacia sin romper el resto del perfil.
+  try {
+    const todos = await obtenerLogros()
+    logros.value = todos.filter((logro) => logro.obtenido).slice(0, 3)
+  } catch {
+    logros.value = []
   }
 })
 </script>

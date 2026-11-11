@@ -204,8 +204,6 @@ async function cargar() {
       ) {
         router.replace(destino)
       }
-    } else if (dataCurso) {
-      router.replace(rutaResultados(dataLeccion, dataUnidad, dataCurso))
     }
 
     if (!dataPreguntas.length) {

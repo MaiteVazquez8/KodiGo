@@ -1,5 +1,10 @@
 ﻿<template>
   <div class="activity-runner">
+    <div class="activity-meta">
+      <span class="activity-tipo">{{ etiquetaTipo }}</span>
+      <p v-if="instrucciones" class="activity-instrucciones">{{ instrucciones }}</p>
+    </div>
+
     <h2 class="activity-statement">{{ pregunta.enunciado }}</h2>
 
     <div
@@ -22,8 +27,8 @@
 
     <template v-else-if="tipo === 'completar_texto'">
       <div class="hay-instruccion">
-        EscribÃ­ tu respuesta. Cualquier espaciado extra se ignora
-        <span v-if="datos.estricta">, pero las mayÃºsculas y minÃºsculas cuentan</span>.
+        Escribí tu respuesta. Cualquier espaciado extra se ignora
+        <span v-if="datos.estricta">, pero las mayúsculas y minúsculas cuentan</span>.
       </div>
       <input
         v-model="textoLibre"
@@ -32,7 +37,7 @@
         :disabled="bloqueado"
         autocomplete="off"
         spellcheck="false"
-        placeholder="EscribÃ­ acÃ¡â€¦"
+        placeholder="Escribí acá…"
         @keydown.enter.prevent="accionPrincipal"
       />
     </template>
@@ -78,13 +83,13 @@
         </button>
       </div>
       <div v-else class="hay-instruccion">
-        TocÃ¡ un hueco para borrarlo y escribÃ­ el texto que falta.
+        Tocá un hueco para borrarlo y escribí el texto que falta.
       </div>
     </template>
 
     <template v-else-if="tipo === 'ordenar'">
       <div class="hay-instruccion">
-        OrdenÃ¡ los elementos con flechas o arrastrÃ¡ndo el Ã­tem.
+        Ordená los elementos con flechas o arrastrándo el ítem.
       </div>
       <ol class="pasosOrden">
         <li
@@ -125,7 +130,7 @@
 
     <template v-else-if="tipo === 'relacionar'">
       <div class="hay-instruccion">
-        TocÃ¡ un elemento de la izquierda y su pareja de la derecha para unirlos.
+        Tocá un elemento de la izquierda y su pareja de la derecha para unirlos.
       </div>
       <div class="dos-col">
         <div class="col">
@@ -156,6 +161,139 @@
             <span>{{ item.texto }}</span>
           </button>
         </div>
+      </div>
+    </template>
+
+    <template v-else-if="tipo === 'escribir_codigo' || tipo === 'corregir_codigo'">
+      <div class="hay-instruccion">
+        <template v-if="tipo === 'corregir_codigo'">
+          Corregí el código para que cumpla el enunciado. Se ignoran los espacios de más.
+        </template>
+        <template v-else>
+          Escribí tu solución. Se ignoran los espacios de más y el servidor valida el resultado.
+        </template>
+      </div>
+      <textarea
+        v-model="codigoEscrito"
+        class="editor-codigo k-mono"
+        :disabled="bloqueado"
+        rows="10"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        aria-label="Editor de código"
+      />
+      <div class="editor-acciones">
+        <button
+          type="button"
+          class="k-btn k-btn--ghost editor-boton"
+          :disabled="bloqueado || ejecutandoVista"
+          @click="ejecutarVistaPrevia"
+        >
+          <q-icon name="play_arrow" size="18px" />
+          Vista previa local
+        </button>
+        <span class="editor-nota">No corrige: solo muestra console.log en tu navegador.</span>
+      </div>
+      <pre v-if="salidaVista !== null" class="salida-vista k-mono">{{ salidaVista || '(sin salida)' }}</pre>
+      <div v-if="pruebas.length" class="pruebas">
+        <p class="pruebas-titulo">Casos de ejemplo</p>
+        <ul class="pruebas-lista">
+          <li v-for="(prueba, index) in pruebas" :key="index" class="prueba">
+            <span v-if="prueba.entrada" class="k-mono">Entrada: {{ prueba.entrada }}</span>
+            <span v-if="prueba.esperado" class="k-mono">Esperado: {{ prueba.esperado }}</span>
+          </li>
+        </ul>
+      </div>
+    </template>
+
+    <template v-else-if="tipo === 'salida_codigo' || tipo === 'predecir'">
+      <div class="hay-instruccion">
+        {{ tipo === 'predecir' ? 'Leé el código y elegí o escribí qué valor resulta.' : 'Leé el código y respondé cuál es la salida.' }}
+      </div>
+      <pre class="codigo-analizar k-mono">{{ datos.codigo }}</pre>
+      <div v-if="modoOpciones" class="options">
+        <button
+          v-for="(opcion, index) in opcionesVisibles"
+          :key="opcion.id"
+          type="button"
+          class="option"
+          :class="optionClasses(opcion)"
+          :disabled="bloqueado"
+          @click="seleccionarOpcion(opcion)"
+        >
+          <span class="option-letter k-mono">{{ letters[index] }}</span>
+          <code class="option-text k-mono">{{ opcion.texto }}</code>
+        </button>
+      </div>
+      <input
+        v-else
+        v-model="textoLibre"
+        type="text"
+        class="campo-texto k-mono"
+        :disabled="bloqueado"
+        autocomplete="off"
+        spellcheck="false"
+        aria-label="Respuesta esperada"
+      />
+    </template>
+
+    <template v-else-if="tipo === 'bloques'">
+      <div class="hay-instruccion">
+        Armá el programa: tocá un bloque disponible para agregarlo, y usá las flechas o la papelera para ordenarlo o quitarlo.
+      </div>
+      <div class="bloques-armado">
+        <p class="bloques-titulo">Tu programa</p>
+        <ol v-if="bloquesElegidos.length" class="bloques-lista">
+          <li v-for="(bloque, index) in bloquesElegidos" :key="bloque.id" class="bloque-item">
+            <span class="bloque-texto k-mono">{{ bloque.texto }}</span>
+            <span class="bloque-acciones">
+              <button
+                type="button"
+                class="paso-btn"
+                :disabled="bloqueado || index === 0"
+                aria-label="Subir bloque"
+                @click="moverBloque(index, -1)"
+              >
+                <q-icon name="expand_less" size="16px" />
+              </button>
+              <button
+                type="button"
+                class="paso-btn"
+                :disabled="bloqueado || index === bloquesElegidos.length - 1"
+                aria-label="Bajar bloque"
+                @click="moverBloque(index, 1)"
+              >
+                <q-icon name="expand_more" size="16px" />
+              </button>
+              <button
+                type="button"
+                class="paso-btn"
+                :disabled="bloqueado"
+                aria-label="Quitar bloque"
+                @click="quitarBloque(index)"
+              >
+                <q-icon name="delete_outline" size="16px" />
+              </button>
+            </span>
+          </li>
+        </ol>
+        <p v-else class="bloques-vacio">Todavía no agregaste bloques.</p>
+      </div>
+      <div class="bloques-paleta">
+        <p class="bloques-titulo">Bloques disponibles</p>
+        <button
+          v-for="bloque in bloquesPaleta"
+          :key="bloque.id"
+          type="button"
+          class="bloque-suelto k-mono"
+          :disabled="bloqueado"
+          @click="agregarBloque(bloque.id)"
+        >
+          <q-icon name="add" size="15px" />
+          {{ bloque.texto }}
+        </button>
+        <p v-if="!bloquesPaleta.length" class="bloques-vacio">Usaste todos los bloques.</p>
       </div>
     </template>
 
@@ -218,6 +356,27 @@ const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 const tipo = computed(() => props.pregunta?.tipo ?? 'seleccion')
 const datos = computed(() => props.pregunta?.datos ?? {})
 
+const ETIQUETAS_TIPO = {
+  seleccion: 'Selección múltiple',
+  verdadero_falso: 'Verdadero o falso',
+  completar_texto: 'Completar texto',
+  completar_codigo: 'Completar código',
+  ordenar: 'Ordenar pasos',
+  relacionar: 'Relacionar columnas',
+  escribir_codigo: 'Escribir código',
+  corregir_codigo: 'Corregir código',
+  salida_codigo: 'Salida de código',
+  predecir: 'Predecir resultado',
+  bloques: 'Armar con bloques',
+}
+
+const etiquetaTipo = computed(() => ETIQUETAS_TIPO[tipo.value] ?? 'Actividad')
+
+const instrucciones = computed(() => {
+  const texto = datos.value.instrucciones
+  return typeof texto === 'string' ? texto.trim() : ''
+})
+
 const seleccionId = ref(null)
 const textoLibre = ref('')
 const blancos = ref({})
@@ -226,6 +385,10 @@ const ordenElementos = ref([])
 const paresFormados = ref({})
 const lateralPivot = ref(null)
 const marcadoOrden = ref(-1)
+const codigoEscrito = ref('')
+const salidaVista = ref(null)
+const ejecutandoVista = ref(false)
+const bloquesElegidos = ref([])
 
 const respuestaLockeada = computed(() => Boolean(props.devolucion))
 
@@ -277,12 +440,141 @@ function mezclarConSemilla(lista, semillaExtra) {
 }
 
 const opcionesVisibles = computed(() => {
-  if (tipo.value !== 'seleccion') return opciones.value
+  if (!['seleccion', 'salida_codigo', 'predecir'].includes(tipo.value)) return opciones.value
+  if (tipo.value !== 'seleccion' && !modoOpciones.value) return opciones.value
   return mezclarConSemilla(opciones.value, 'opciones')
 })
 
 // ---------------------------------------------------------------------------
-// Completar el cÃ³digo: trozos de cÃ³digo con los blancos visibles y chips con
+// Salida de codigo / predecir: el mismo tipo se configura con opciones o con
+// respuesta escrita. El modo lo decide la actividad, no el cliente.
+// ---------------------------------------------------------------------------
+
+const modoOpciones = computed(() => {
+  if (!['salida_codigo', 'predecir'].includes(tipo.value)) return false
+  return (datos.value.modo ?? 'texto') === 'opciones'
+})
+
+// ---------------------------------------------------------------------------
+// Escribir / corregir codigo
+// ---------------------------------------------------------------------------
+
+const pruebas = computed(() =>
+  Array.isArray(datos.value.pruebas) ? datos.value.pruebas : [],
+)
+
+function ejecutarVistaPrevia() {
+  if (ejecutandoVista.value) return
+  salidaVista.value = ''
+  ejecutandoVista.value = true
+
+  const fuenteWorker = `
+    self.onmessage = function (evento) {
+      const salida = []
+      const formatear = (valor) => {
+        if (typeof valor === 'string') return valor
+        try { return JSON.stringify(valor) } catch { return String(valor) }
+      }
+      const consola = {
+        log: (...args) => salida.push(args.map(formatear).join(' ')),
+        info: (...args) => salida.push(args.map(formatear).join(' ')),
+        warn: (...args) => salida.push(args.map(formatear).join(' ')),
+        error: (...args) => salida.push(args.map(formatear).join(' ')),
+      }
+      try {
+        const ejecutar = new Function(
+          'console', 'fetch', 'XMLHttpRequest', 'WebSocket', 'importScripts', 'self', 'globalThis',
+          evento.data
+        )
+        ejecutar(consola, undefined, undefined, undefined, undefined, undefined, undefined)
+      } catch (error) {
+        salida.push('Error: ' + (error && error.message ? error.message : String(error)))
+      }
+      self.postMessage(salida.join('\\n'))
+    }
+  `
+
+  let worker
+  try {
+    const blob = new Blob([fuenteWorker], { type: 'text/javascript' })
+    worker = new Worker(URL.createObjectURL(blob))
+  } catch {
+    ejecutandoVista.value = false
+    salidaVista.value = 'Tu navegador no permite la vista previa local.'
+    return
+  }
+
+  const temporizador = setTimeout(() => {
+    worker.terminate()
+    ejecutandoVista.value = false
+    salidaVista.value = 'La vista previa tardó demasiado y se detuvo.'
+  }, 2000)
+
+  worker.onmessage = (evento) => {
+    clearTimeout(temporizador)
+    worker.terminate()
+    ejecutandoVista.value = false
+    salidaVista.value = String(evento.data ?? '')
+  }
+  worker.onerror = () => {
+    clearTimeout(temporizador)
+    worker.terminate()
+    ejecutandoVista.value = false
+    salidaVista.value = 'No se pudo ejecutar la vista previa.'
+  }
+  worker.postMessage(codigoEscrito.value)
+}
+
+// ---------------------------------------------------------------------------
+// Bloques: paleta + programa armado, con distractores que nunca estan en la
+// solucion. No es una copia de "ordenar": aca hay que elegir y descartar.
+// ---------------------------------------------------------------------------
+
+const bloquesDisponibles = computed(() =>
+  Array.isArray(datos.value.bloques) ? datos.value.bloques : [],
+)
+
+const bloquesPorId = computed(() => {
+  const mapa = {}
+  bloquesDisponibles.value.forEach((bloque) => {
+    mapa[bloque.id] = bloque
+  })
+  return mapa
+})
+
+const bloquesPaleta = computed(() =>
+  mezclarConSemilla(
+    bloquesDisponibles.value.filter(
+      (bloque) => !bloquesElegidos.value.some((elegido) => elegido.id === bloque.id),
+    ),
+    'paleta',
+  ),
+)
+
+function agregarBloque(id) {
+  if (bloqueado.value) return
+  const bloque = bloquesPorId.value[id]
+  if (!bloque) return
+  bloquesElegidos.value = [...bloquesElegidos.value, { id: bloque.id, texto: bloque.texto }]
+}
+
+function quitarBloque(index) {
+  if (bloqueado.value) return
+  bloquesElegidos.value = bloquesElegidos.value.filter((_, posicion) => posicion !== index)
+}
+
+function moverBloque(index, delta) {
+  if (bloqueado.value) return
+  const destino = index + delta
+  if (destino < 0 || destino >= bloquesElegidos.value.length) return
+  const lista = [...bloquesElegidos.value]
+  const [bloque] = lista.splice(index, 1)
+  lista.splice(destino, 0, bloque)
+  bloquesElegidos.value = lista
+}
+
+// ---------------------------------------------------------------------------
+// Completar el código: trozos de código con los blancos visibles y chips con
 // los tokens candidatos (mezclados; la solucion correcta nunca viaja al cliente).
 // ---------------------------------------------------------------------------
 
@@ -333,6 +625,10 @@ watch(
     paresFormados.value = {}
     lateralPivot.value = null
     marcadoOrden.value = -1
+    codigoEscrito.value = datos.value.codigo_inicial ?? datos.value.plantilla ?? ''
+    salidaVista.value = null
+    ejecutandoVista.value = false
+    bloquesElegidos.value = []
     ordenElementos.value = mezclarConSemilla(
       opciones.value.map((o) => o.id),
       'orden',
@@ -386,7 +682,7 @@ function soltarArrastre(destino) {
 }
 
 // ---------------------------------------------------------------------------
-// Relacionar: dos columnas, tap una opciÃ³n de cada lado para formar un par.
+// Relacionar: dos columnas, tap una opción de cada lado para formar un par.
 // ---------------------------------------------------------------------------
 
 const columnaA = computed(() =>
@@ -454,6 +750,15 @@ const hayRespuesta = computed(() => {
   if (tipo.value === 'relacionar') {
     return Object.keys(paresFormados.value).length === (datos.value.columna_a?.length ?? 0)
   }
+  if (tipo.value === 'escribir_codigo' || tipo.value === 'corregir_codigo') {
+    return codigoEscrito.value.trim().length > 0
+  }
+  if (tipo.value === 'salida_codigo' || tipo.value === 'predecir') {
+    return modoOpciones.value ? seleccionId.value !== null : textoLibre.value.trim().length > 0
+  }
+  if (tipo.value === 'bloques') {
+    return bloquesElegidos.value.length > 0
+  }
   return false
 })
 
@@ -464,7 +769,7 @@ const puedeAccionar = computed(() => {
 })
 
 const actionLabel = computed(() => {
-  if (props.corrigiendo) return 'Comprobandoâ€¦'
+  if (props.corrigiendo) return 'Comprobando…'
   if (respuestaLockeada.value && props.devolucion?.estado === 'error') return 'Reintentar'
   if (respuestaLockeada.value) return 'Siguiente'
   return 'Comprobar'
@@ -493,7 +798,7 @@ const feedbackMensaje = computed(() => {
   if (props.devolucion?.estado === 'error') {
     return (
       props.devolucion.mensaje ||
-      'Hubo un problema al comprobar tu respuesta. ReintentÃ¡ o revisÃ¡ tu conexiÃ³n.'
+      'Hubo un problema al comprobar tu respuesta. Reintentá o revisá tu conexión.'
     )
   }
   return props.devolucion?.explicacion || ''
@@ -533,6 +838,17 @@ function cuerpoRespuesta() {
       pares: Object.entries(paresFormados.value).map(([id_a, id_b]) => ({ id_a, id_b })),
     }
   }
+  if (tipo.value === 'escribir_codigo' || tipo.value === 'corregir_codigo') {
+    return { codigo: codigoEscrito.value }
+  }
+  if (tipo.value === 'salida_codigo' || tipo.value === 'predecir') {
+    return modoOpciones.value
+      ? { opcion_id: seleccionId.value }
+      : { valor: textoLibre.value }
+  }
+  if (tipo.value === 'bloques') {
+    return { bloques: bloquesElegidos.value.map((bloque) => bloque.id) }
+  }
   return null
 }
 
@@ -562,6 +878,32 @@ function accionPrincipal() {
   font-size: 18px;
   font-weight: 700;
   line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.activity-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.activity-tipo {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 5, 194, 0.45);
+  background: rgba(142, 5, 194, 0.16);
+  color: var(--k-accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.activity-instrucciones {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--k-text-2);
   white-space: pre-wrap;
 }
 
@@ -954,5 +1296,178 @@ function accionPrincipal() {
   .dos-col {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Modalidades de codigo y bloques
+   --------------------------------------------------------------------------- */
+
+.editor-codigo {
+  width: 100%;
+  min-height: 190px;
+  padding: var(--k-space-4);
+  border-radius: var(--k-radius);
+  border: 1px solid var(--k-line);
+  background: rgba(12, 6, 18, 0.92);
+  color: var(--k-text);
+  font-size: 13.5px;
+  line-height: 1.55;
+  resize: vertical;
+  tab-size: 2;
+}
+
+.editor-codigo:focus {
+  outline: none;
+  border-color: var(--k-accent);
+}
+
+.editor-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-3);
+}
+
+.editor-boton {
+  flex-shrink: 0;
+}
+
+.editor-nota {
+  font-size: 12px;
+  color: var(--k-text-2);
+}
+
+.salida-vista,
+.codigo-analizar {
+  margin: 0;
+  padding: var(--k-space-4);
+  border-radius: var(--k-radius);
+  border: 1px solid var(--k-line);
+  background: rgba(12, 6, 18, 0.92);
+  color: var(--k-text);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pruebas {
+  padding: var(--k-space-3) var(--k-space-4);
+  border-radius: var(--k-radius);
+  border: 1px dashed var(--k-line);
+}
+
+.pruebas-titulo {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--k-text-2);
+}
+
+.pruebas-lista {
+  display: grid;
+  gap: 6px;
+  margin: var(--k-space-2) 0 0;
+  padding-left: 18px;
+}
+
+.prueba {
+  font-size: 12.5px;
+  color: var(--k-text-2);
+}
+
+.prueba span {
+  display: inline-block;
+  margin-right: var(--k-space-3);
+}
+
+.bloques-armado,
+.bloques-paleta {
+  padding: var(--k-space-4);
+  border-radius: var(--k-radius);
+  border: 1px solid var(--k-line);
+  background: rgba(24, 9, 31, 0.55);
+}
+
+.bloques-titulo {
+  margin-bottom: var(--k-space-3);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--k-text-2);
+}
+
+.bloques-lista {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bloque-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--k-space-3);
+  padding: 10px var(--k-space-3);
+  border-radius: 12px;
+  border: 1px solid var(--k-line);
+  background: var(--k-surface-2);
+}
+
+.bloque-texto {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.bloque-acciones {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.bloques-paleta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bloques-paleta .bloques-titulo,
+.bloques-paleta .bloques-vacio {
+  width: 100%;
+}
+
+.bloque-suelto {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px dashed rgba(142, 5, 194, 0.5);
+  background: rgba(142, 5, 194, 0.12);
+  color: var(--k-text);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.bloque-suelto:hover:not(:disabled) {
+  border-color: var(--k-accent);
+  background: rgba(142, 5, 194, 0.22);
+}
+
+.bloque-suelto:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bloques-vacio {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--k-text-2);
 }
 </style>

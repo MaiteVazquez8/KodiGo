@@ -18,6 +18,13 @@
       />
 
       <EstadoPantalla
+        v-else-if="cargandoPerfiles"
+        tipo="cargando"
+        titulo="Buscando…"
+        mensaje="Un momento."
+      />
+
+      <EstadoPantalla
         v-else-if="!resultados.length"
         tipo="inexistente"
         titulo="Sin resultados"
@@ -31,8 +38,18 @@
             <p class="resultado-alias">{{ persona.alias }}</p>
             <p class="resultado-nivel">Nivel {{ persona.nivel }}</p>
           </div>
+          <button
+            type="button"
+            class="resultado-agregar"
+            :disabled="enviando === persona.alias || enviadas.has(persona.alias)"
+            @click="agregar(persona)"
+          >
+            {{ enviadas.has(persona.alias) ? 'Enviada' : 'Agregar' }}
+          </button>
         </li>
       </ul>
+
+      <p v-if="aviso" class="resultado-aviso">{{ aviso }}</p>
     </main>
   </div>
 </template>
@@ -41,24 +58,40 @@
 import { computed, ref, watch } from 'vue'
 import CampoFormulario from '@/components/CampoFormulario.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
-import { obtenerPerfilesPublicos } from '@/services/catalogo'
+import { estado as estadoAuth } from '@/services/auth'
+import { enviarSolicitudAmistad, obtenerPerfilesPublicos } from '@/services/catalogo'
 
 const busqueda = ref('')
 const perfiles = ref([])
+const cargandoPerfiles = ref(false)
+const intentoPerfiles = ref(false)
+const enviando = ref('')
+const enviadas = ref(new Set())
+const aviso = ref('')
+
+// La lista de perfiles publicos se carga una sola vez y se filtra en el
+// cliente: pedirla en cada tecla satura la base sin ganar nada.
+async function asegurarPerfiles() {
+  if (perfiles.value.length || cargandoPerfiles.value || intentoPerfiles.value) return
+  intentoPerfiles.value = true
+  cargandoPerfiles.value = true
+  try {
+    perfiles.value = await obtenerPerfilesPublicos()
+    aviso.value = ''
+  } catch {
+    perfiles.value = []
+    aviso.value = estadoAuth.usuario
+      ? 'No se pudo cargar la lista. Revisá tu conexión.'
+      : 'Iniciá sesión para ver a otros programadores.'
+  } finally {
+    cargandoPerfiles.value = false
+  }
+}
 
 watch(
   busqueda,
-  async (valor) => {
-    const texto = valor.trim()
-    if (texto.length < 2) {
-      perfiles.value = []
-      return
-    }
-    try {
-      perfiles.value = await obtenerPerfilesPublicos()
-    } catch {
-      perfiles.value = []
-    }
+  (valor) => {
+    if (valor.trim().length >= 2) asegurarPerfiles()
   },
   { immediate: true },
 )
@@ -68,6 +101,25 @@ const resultados = computed(() => {
   if (texto.length < 2) return []
   return perfiles.value.filter((perfil) => perfil.alias.toLowerCase().includes(texto)).slice(0, 10)
 })
+
+async function agregar(persona) {
+  if (!estadoAuth.usuario) {
+    aviso.value = 'Iniciá sesión para enviar solicitudes de amistad.'
+    return
+  }
+  enviando.value = persona.alias
+  aviso.value = ''
+  try {
+    await enviarSolicitudAmistad(persona.alias)
+    enviadas.value.add(persona.alias)
+    enviadas.value = new Set(enviadas.value)
+    aviso.value = `Solicitud enviada a ${persona.alias}.`
+  } catch (error) {
+    aviso.value = error.message
+  } finally {
+    enviando.value = ''
+  }
+}
 </script>
 
 <style scoped>
@@ -129,6 +181,29 @@ const resultados = computed(() => {
 }
 
 .resultado-nivel {
+  font-size: 12.5px;
+  color: var(--k-text-2);
+}
+
+.resultado-agregar {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 5, 194, 0.5);
+  background: rgba(142, 5, 194, 0.16);
+  color: var(--k-accent);
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.resultado-agregar:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.resultado-aviso {
+  margin-top: var(--k-space-4);
   font-size: 12.5px;
   color: var(--k-text-2);
 }

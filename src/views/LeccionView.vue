@@ -45,7 +45,7 @@
             </div>
             <div class="lesson-meta">
               <p class="lesson-meta-etiqueta">RECOMPENSA</p>
-              <p class="lesson-meta-valor es-acento">+{{ xpLeccion }} XP</p>
+              <p class="lesson-meta-valor es-acento">{{ xpLeccion }} XP</p>
             </div>
           </div>
         </section>
@@ -114,13 +114,17 @@ import {
   resolverUnidad,
   rutaLeccion,
   rutaPregunta,
+  rutaUnidad,
 } from '@/services/catalogo'
 import { estado as estadoAuth } from '@/services/auth'
 
 const route = useRoute()
 const router = useRouter()
 
-const XP_POR_LECCION = 20
+// El XP de primera aprobación es 20 base + 5 por acierto (ver finalizar_intento).
+// La pantalla muestra la parte fija y no promete XP por repetir una clase ya
+// aprobada.
+const XP_POR_LECCION = '20 + 5 × acierto'
 const MINUTOS_POR_PREGUNTA = 2
 
 const estado = ref('cargando')
@@ -138,10 +142,7 @@ const duracionMinutos = computed(() => Math.max(1, preguntas.value.length * MINU
 
 const linkUnidad = computed(() => {
   if (leccion.value && unidad.value) {
-    return {
-      name: 'unidad',
-      params: { courseId: unidad.value.cursoId, unitId: unidad.value.id },
-    }
+    return rutaUnidad(unidad.value, curso.value)
   }
   return { name: 'cursos' }
 })

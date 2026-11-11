@@ -1,4 +1,4 @@
-﻿create extension if not exists pgcrypto;
+create extension if not exists pgcrypto;
 
 create table if not exists cursos (
     id uuid primary key default gen_random_uuid(),
@@ -345,175 +345,6 @@ $$;
 --   completar_codigo:   {"blancos": {"b1": "texto", ...}}
 --   ordenar:            {"orden": ["<id elemento>", ...]}
 --   relacionar:         {"pares": [{"id_a": "...", "id_b": "..."}, ...]}
-create or replace function comprobar_respuesta(
-    p_pregunta_id uuid,
-    p_respuesta jsonb
-)
-returns table (
-    correcta boolean,
-    explicacion text
-)
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-    v_tipo varchar;
-    v_datos jsonb;
-    v_opcion_correcta uuid;
-    v_solucion jsonb;
-    v_explicacion text;
-    v_respuesta jsonb;
-    v_valor jsonb;
-    v_correcta boolean := false;
-    v_blanco jsonb;
-    v_clave text;
-    v_esperado text;
-    v_estricto boolean;
-    v_orden_esperada jsonb;
-    v_orden_enviada jsonb;
-    v_longitud integer;
-    v_total_pares integer;
-begin
-    select p.tipo, p.datos, s.opcion_correcta_id, s.solucion, s.explicacion
-    into v_tipo, v_datos, v_opcion_correcta, v_solucion, v_explicacion
-    from preguntas p
-    join soluciones s on s.pregunta_id = p.id
-    where p.id = p_pregunta_id
-      and p.estado_publicacion = 'publicado';
-
-    if v_tipo is null then
-        raise exception 'La pregunta no existe o no esta publicada';
-    end if;
-
-    if p_respuesta is null then
-        return query select false, v_explicacion;
-        return;
-    end if;
-
-    if v_tipo in ('seleccion', 'verdadero_falso') then
-        v_valor := p_respuesta -> 'opcion_id';
-
-        if v_valor is null then
-            raise exception 'La respuesta debe indicar la opcion elegida';
-        end if;
-
-        if not exists (
-            select 1 from opciones
-            where id = (v_valor #>> '{}')::uuid
-              and pregunta_id = p_pregunta_id
-        ) then
-            raise exception 'La opcion no pertenece a la pregunta';
-        end if;
-
-        v_correcta := v_opcion_correcta is not null
-            and v_opcion_correcta = (v_valor #>> '{}')::uuid;
-
-    elsif v_tipo = 'completar_texto' then
-        v_valor := p_respuesta -> 'valor';
-
-        if v_valor is null then
-            raise exception 'La respuesta debe indicar el valor escrito';
-        end if;
-
-        v_estricto := coalesce(v_datos ->> 'estricta', 'false') = 'true';
-        v_correcta := false;
-
-        if v_datos -> 'valor' is not null then
-            v_correcta := texto_coincide_respuesta(
-                v_valor #>> '{}', v_datos ->> 'valor', v_estricto
-            );
-        end if;
-
-        if not v_correcta then
-            for v_esperado in select jsonb_array_elements_text(coalesce(v_datos -> 'alternativas', '[]'::jsonb)) loop
-                exit when v_correcta;
-                v_correcta := texto_coincide_respuesta(v_valor #>> '{}', v_esperado, v_estricto);
-            end loop;
-        end if;
-
-    elsif v_tipo = 'completar_codigo' then
-        v_respuesta := p_respuesta -> 'blancos';
-
-        if v_respuesta is null then
-            raise exception 'La respuesta debe indicar los valores de los blancos';
-        end if;
-
-        v_correcta := true;
-
-        for v_blanco in select jsonb_array_elements(v_datos -> 'blancos') loop
-            exit when not v_correcta;
-            v_clave := v_blanco ->> 'clave';
-            v_valor := v_respuesta -> v_clave;
-            v_estricto := coalesce(v_blanco ->> 'estricta', 'true') = 'true';
-
-            if v_valor is null then
-                v_correcta := false;
-            else
-                v_correcta := texto_coincide_respuesta(v_valor #>> '{}', v_blanco ->> 'valor', v_estricto);
-
-                if not v_correcta then
-                    for v_esperado in select jsonb_array_elements_text(coalesce(v_blanco -> 'alternativas', '[]'::jsonb)) loop
-                        exit when v_correcta;
-                        v_correcta := texto_coincide_respuesta(v_valor #>> '{}', v_esperado, v_estricto);
-                    end loop;
-                end if;
-            end if;
-        end loop;
-
-    elsif v_tipo = 'ordenar' then
-        v_orden_esperada := v_solucion -> 'orden';
-        v_orden_enviada := p_respuesta -> 'orden';
-
-        if v_orden_esperada is null or v_orden_enviada is null
-           or jsonb_typeof(v_orden_enviada) <> 'array'
-        then
-            raise exception 'La respuesta debe indicar el orden de los elementos';
-        end if;
-
-        -- El orden enviado debe ser exactamente el guardado y cada elemento
-        -- debe pertenecer a esta pregunta (no a otra actividad).
-        v_longitud := jsonb_array_length(v_orden_esperada);
-        v_correcta :=
-            v_longitud = jsonb_array_length(v_orden_enviada)
-            and v_orden_esperada = v_orden_enviada
-            and (
-                select count(*)
-                from jsonb_array_elements_text(v_orden_enviada) ids
-                join opciones o on o.id::text = ids and o.pregunta_id = p_pregunta_id
-            ) = v_longitud;
-
-    elsif v_tipo = 'relacionar' then
-        v_respuesta := p_respuesta -> 'pares';
-
-        if v_respuesta is null or jsonb_typeof(v_respuesta) <> 'array' then
-            raise exception 'La respuesta debe indicar los pares unidos';
-        end if;
-
-        v_total_pares := jsonb_array_length(v_solucion -> 'pares');
-
-        -- Todos los pares correctos, sin duplicados ni pares sobrantes.
-        v_correcta :=
-            v_total_pares = jsonb_array_length(v_respuesta)
-            and (select count(distinct value ->> 'id_a') from jsonb_array_elements(v_respuesta)) = v_total_pares
-            and not exists (
-                select 1
-                from jsonb_array_elements(v_solucion -> 'pares') sp
-                where not exists (
-                    select 1
-                    from jsonb_array_elements(v_respuesta) re
-                    where re ->> 'id_a' = sp ->> 'id_a'
-                      and re ->> 'id_b' = sp ->> 'id_b'
-                )
-            );
-
-    else
-        raise exception 'Tipo de actividad no reconocido: %', v_tipo;
-    end if;
-
-    return query select v_correcta, v_explicacion;
-end;
-$$;
 
 drop trigger if exists trigger_crear_perfil on auth.users;
 create trigger trigger_crear_perfil
@@ -716,22 +547,38 @@ as $$
       and estado_publicacion = 'publicado';
 $$;
 
--- Solo una lecciÃ³n 'publicado' se puede practicar. 'bloqueada' sigue siendo
+-- Solo una lección 'publicado' se puede practicar. 'bloqueada' sigue siendo
 -- visible para listar el contenido, pero el servidor no acepta intentar
 -- resolverla: asi el desbloqueo no depende solo de la interfaz.
+-- Una leccion se puede practicar si esta publicada y si su unidad esta
+-- publicada para todos o desbloqueada para ESTE usuario. El estado global de
+-- la unidad no se modifica al avanzar: el desbloqueo vive en progreso_unidades.
 create or replace function es_leccion_publicada(p_leccion_id uuid)
 returns boolean
-language sql
+language plpgsql
 stable
 security invoker
 set search_path = public
 as $$
-    select exists (
+begin
+    return exists (
         select 1
-        from lecciones
-        where id = p_leccion_id
-          and estado_publicacion = 'publicado'
+        from lecciones l
+        join unidades u on u.id = l.unidad_id
+        where l.id = p_leccion_id
+          and l.estado_publicacion = 'publicado'
+          and u.estado_publicacion in ('publicado', 'bloqueada')
+          and (
+              u.estado_publicacion = 'publicado'
+              or exists (
+                  select 1
+                  from progreso_unidades pu
+                  where pu.usuario_id = auth.uid()
+                    and pu.unidad_id = u.id
+              )
+          )
     );
+end;
 $$;
 
 create or replace function recalcular_intento(p_intento_id uuid)
@@ -791,10 +638,10 @@ begin
 end;
 $$;
 
--- Publica la siguiente unidad de un curso cuando todas las lecciones
--- publicadas de la unidad actual del usuario quedan aprobadas. Es parte del
--- desbloqueo secuencial: sin esto, las unidades 2..N quedarian congeladas en
--- estado 'bloqueada' para siempre.
+-- Desbloqueo individual: cuando todas las lecciones publicadas de la unidad
+-- actual del usuario quedan aprobadas, se registra la unidad como completada
+-- y se habilita la siguiente SOLO para ese usuario en progreso_unidades. No se
+-- toca el estado editorial global de la unidad.
 create or replace function desbloquear_siguiente_unidad(
     p_usuario_id uuid,
     p_leccion_id uuid
@@ -807,10 +654,11 @@ as $$
 declare
     v_unidad_actual uuid;
     v_curso uuid;
+    v_orden integer;
     v_unidad_siguiente uuid;
 begin
-    select l.unidad_id, u.curso_id
-    into v_unidad_actual, v_curso
+    select l.unidad_id, u.curso_id, u.orden
+    into v_unidad_actual, v_curso, v_orden
     from lecciones l
     join unidades u on u.id = l.unidad_id
     where l.id = p_leccion_id;
@@ -819,7 +667,8 @@ begin
         return;
     end if;
 
-    -- Falta leccion: la unidad no esta completa, no hay nada que desbloquear.
+    -- Mientras falte una leccion publicada de la unidad actual no se
+    -- desbloquea la siguiente.
     if exists (
         select 1
         from lecciones l
@@ -835,19 +684,23 @@ begin
         return;
     end if;
 
+    insert into progreso_unidades (usuario_id, unidad_id, completada_en)
+    values (p_usuario_id, v_unidad_actual, now())
+    on conflict (usuario_id, unidad_id) do update
+        set completada_en = coalesce(progreso_unidades.completada_en, excluded.completada_en);
+
     select u.id into v_unidad_siguiente
     from unidades u
     where u.curso_id = v_curso
-      and u.estado_publicacion = 'bloqueada'
-      and u.orden = (
-          select min(u2.orden) from unidades u2
-          where u2.curso_id = v_curso and u2.estado_publicacion = 'bloqueada'
-      );
+      and u.orden > v_orden
+      and u.estado_publicacion in ('publicado', 'bloqueada')
+    order by u.orden
+    limit 1;
 
     if v_unidad_siguiente is not null then
-        update unidades
-        set estado_publicacion = 'publicado'
-        where id = v_unidad_siguiente;
+        insert into progreso_unidades (usuario_id, unidad_id)
+        values (p_usuario_id, v_unidad_siguiente)
+        on conflict (usuario_id, unidad_id) do nothing;
     end if;
 end;
 $$;
@@ -1056,6 +909,11 @@ begin
         raise exception 'Se necesita una sesion para finalizar un intento';
     end if;
 
+    -- Serializa los cierres de este usuario: dos finalizaciones concurrentes
+    -- sobre dos intentos distintos de la misma leccion no pueden evaluar a la
+    -- vez el gate de primera aprobacion.
+    perform 1 from perfiles where id = v_usuario for update;
+
     select i.leccion_id, i.estado into v_leccion, v_estado
     from intentos i
     where i.id = p_intento_id and i.usuario_id = v_usuario;
@@ -1121,7 +979,9 @@ begin
         -- El perfil lo crea el trigger al crearse el usuario. Si todavia no
         -- existe se corta la operacion: es preferible fallar y reintentar
         -- que perder la respuesta o el XP en silencio.
-        update perfiles set experiencia = experiencia + v_xp, updated_at = now()
+        update perfiles set experiencia = experiencia + v_xp,
+            nivel = nivel_por_experiencia(experiencia + v_xp),
+            updated_at = now()
         where id = v_usuario;
 
         if not found then
@@ -1133,9 +993,25 @@ begin
         select i.xp_ganado into v_xp from intentos i where i.id = p_intento_id;
     end if;
 
+    -- Racha diaria real: se actualiza al cerrar cualquier intento, no solo al
+    -- aprobar. Un dia sin actividad la reinicia en 1 al volver.
+    update perfiles
+    set racha_dias = case
+            when ultima_actividad_en = current_date then racha_dias
+            when ultima_actividad_en = current_date - 1 then racha_dias + 1
+            else 1
+        end,
+        ultima_actividad_en = current_date,
+        updated_at = now()
+    where id = v_usuario;
+
     if v_resumen.aprobado then
         perform desbloquear_siguiente_unidad(v_usuario, v_leccion);
     end if;
+
+    -- Los logros se evaluan al cerrar el intento porque dependen de datos que
+    -- recien ahora quedaron persistidos (lecciones, unidades, respuestas).
+    perform evaluar_logros(v_usuario);
 
     return query
     select v_resumen.porcentaje, v_resumen.correctas, v_resumen.incorrectas,
@@ -1360,7 +1236,7 @@ insert into cursos (
 values (
     '10000000-0000-0000-0000-000000000001',
     'JavaScript',
-    'CreÃ¡ tus primeros programas en el lenguaje mÃ¡s usado del mundo.',
+    'Creá tus primeros programas en el lenguaje más usado del mundo.',
     'El lenguaje de la web',
     'JS',
     'javascriptLogo',
@@ -1376,7 +1252,7 @@ values
     '20000000-0000-0000-0000-000000000001',
     '10000000-0000-0000-0000-000000000001',
     'Variables y datos',
-    'GuardÃ¡ informaciÃ³n y conocÃ© los tipos de datos bÃ¡sicos de JavaScript.',
+    'Guardá información y conocé los tipos de datos básicos de JavaScript.',
     1,
     'publicado'
 ),
@@ -1384,7 +1260,7 @@ values
     '20000000-0000-0000-0000-000000000002',
     '10000000-0000-0000-0000-000000000001',
     'Operadores',
-    'CalculÃ¡ con nÃºmeros y comparÃ¡ valores usando operadores.',
+    'Calculá con números y compará valores usando operadores.',
     2,
     'bloqueada'
 ),
@@ -1392,7 +1268,7 @@ values
     '20000000-0000-0000-0000-000000000003',
     '10000000-0000-0000-0000-000000000001',
     'Condicionales',
-    'TomÃ¡ decisiones en tu cÃ³digo con if y else.',
+    'Tomá decisiones en tu código con if y else.',
     3,
     'bloqueada'
 ),
@@ -1400,7 +1276,7 @@ values
     '20000000-0000-0000-0000-000000000004',
     '10000000-0000-0000-0000-000000000001',
     'Bucles',
-    'RepetÃ­ tareas automÃ¡ticamente con for y while.',
+    'Repetí tareas automáticamente con for y while.',
     4,
     'bloqueada'
 ),
@@ -1408,7 +1284,7 @@ values
     '20000000-0000-0000-0000-000000000005',
     '10000000-0000-0000-0000-000000000001',
     'Funciones',
-    'OrganizÃ¡ tu cÃ³digo en bloques reutilizables.',
+    'Organizá tu código en bloques reutilizables.',
     5,
     'bloqueada'
 )
@@ -1419,8 +1295,8 @@ values
 (
     '30000000-0000-0000-0000-000000000001',
     '20000000-0000-0000-0000-000000000001',
-    'Variables y asignaciÃ³n',
-    'Una variable guarda un valor para reutilizarlo despuÃ©s. En JavaScript usamos let para declarar una variable y luego le asignamos un valor.',
+    'Variables y asignación',
+    'Una variable guarda un valor para reutilizarlo después. En JavaScript usamos let para declarar una variable y luego le asignamos un valor.',
     E'let nombre = "Ana";\nlet edad = 18;\nconsole.log(nombre);\nconsole.log(edad);',
     1,
     'publicado'
@@ -1428,8 +1304,8 @@ values
 (
     '30000000-0000-0000-0000-000000000002',
     '20000000-0000-0000-0000-000000000001',
-    'Operadores y cÃ¡lculo',
-    'Los operadores permiten combinar valores y hacer cÃ¡lculos. La suma, resta, multiplicaciÃ³n y divisiÃ³n son las operaciones mÃ¡s comunes.',
+    'Operadores y cálculo',
+    'Los operadores permiten combinar valores y hacer cálculos. La suma, resta, multiplicación y división son las operaciones más comunes.',
     E'let precio = 10;\nlet cantidad = 3;\nlet total = precio * cantidad;\nconsole.log(total);',
     2,
     'publicado'
@@ -1441,7 +1317,7 @@ values
 (
     '40000000-0000-0000-0000-000000000001',
     '30000000-0000-0000-0000-000000000001',
-    'Â¿CuÃ¡l de estas lÃ­neas declara correctamente una variable llamada edad con el valor 18?',
+    '¿Cuál de estas líneas declara correctamente una variable llamada edad con el valor 18?',
     'multiple_choice',
     1,
     'publicado'
@@ -1449,7 +1325,7 @@ values
 (
     '40000000-0000-0000-0000-000000000002',
     '30000000-0000-0000-0000-000000000001',
-    'Â¿QuÃ© valor completa la sentencia para guardar el nombre de una persona?\nlet nombre = ___;',
+    '¿Qué valor completa la sentencia para guardar el nombre de una persona?\nlet nombre = ___;',
     'multiple_choice',
     2,
     'publicado'
@@ -1457,7 +1333,7 @@ values
 (
     '40000000-0000-0000-0000-000000000003',
     '30000000-0000-0000-0000-000000000001',
-    'Â¿QuÃ© opciÃ³n representa una asignaciÃ³n vÃ¡lida de una constante?',
+    '¿Qué opción representa una asignación válida de una constante?',
     'multiple_choice',
     3,
     'publicado'
@@ -1465,7 +1341,7 @@ values
 (
     '40000000-0000-0000-0000-000000000004',
     '30000000-0000-0000-0000-000000000002',
-    'Â¿QuÃ© resultado devuelve 12 + 5?',
+    '¿Qué resultado devuelve 12 + 5?',
     'multiple_choice',
     1,
     'publicado'
@@ -1473,7 +1349,7 @@ values
 (
     '40000000-0000-0000-0000-000000000005',
     '30000000-0000-0000-0000-000000000002',
-    'Â¿QuÃ© operador completa la sentencia para calcular el resto de la divisiÃ³n?\nlet resto = 10 ___ 3;',
+    '¿Qué operador completa la sentencia para calcular el resto de la división?\nlet resto = 10 ___ 3;',
     'multiple_choice',
     2,
     'publicado'
@@ -1481,7 +1357,7 @@ values
 (
     '40000000-0000-0000-0000-000000000006',
     '30000000-0000-0000-0000-000000000002',
-    'Â¿CuÃ¡l de estas expresiones calcula correctamente el total de 4 Ã— 3?',
+    '¿Cuál de estas expresiones calcula correctamente el total de 4 × 3?',
     'multiple_choice',
     3,
     'publicado'
@@ -1541,19 +1417,19 @@ values
 (
     '50000000-0000-0000-0000-000000000009',
     '40000000-0000-0000-0000-000000000003',
-    'const apellido = "PÃ©rez";',
+    'const apellido = "Pérez";',
     1
 ),
 (
     '50000000-0000-0000-0000-000000000010',
     '40000000-0000-0000-0000-000000000003',
-    'const = "PÃ©rez";',
+    'const = "Pérez";',
     2
 ),
 (
     '50000000-0000-0000-0000-000000000011',
     '40000000-0000-0000-0000-000000000003',
-    'let const = "PÃ©rez";',
+    'let const = "Pérez";',
     3
 ),
 (
@@ -1656,17 +1532,17 @@ values
 (
     '40000000-0000-0000-0000-000000000004',
     '50000000-0000-0000-0000-000000000013',
-    'La suma combina ambos valores numÃ©ricos y da 17.'
+    'La suma combina ambos valores numéricos y da 17.'
 ),
 (
     '40000000-0000-0000-0000-000000000005',
     '50000000-0000-0000-0000-000000000017',
-    'El operador % devuelve el resto de la divisiÃ³n: 10 % 3 da 1.'
+    'El operador % devuelve el resto de la división: 10 % 3 da 1.'
 ),
 (
     '40000000-0000-0000-0000-000000000006',
     '50000000-0000-0000-0000-000000000021',
-    'La multiplicaciÃ³n usa el operador *. 4 * 3 equivale a 12.'
+    'La multiplicación usa el operador *. 4 * 3 equivale a 12.'
 )
 on conflict (pregunta_id) do nothing;
 
@@ -3952,7 +3828,7 @@ begin
     from expotec_desafio_preguntas dp
     join preguntas q on q.id = dp.pregunta_id
     where dp.desafio_id = v_desafio.id
-      and q.estado_publicacion in ('publicado', 'borrador')
+      and q.estado_publicacion = 'publicado'
       and q.tipo = 'seleccion'
       and btrim(coalesce(q.enunciado, '')) <> '';
 
@@ -4017,7 +3893,7 @@ begin
             from expotec_desafio_preguntas dp2
             join preguntas q2 on q2.id = dp2.pregunta_id
             where dp2.desafio_id = v_desafio.id
-              and q2.estado_publicacion in ('publicado', 'borrador')
+              and q2.estado_publicacion = 'publicado'
               and q2.tipo = 'seleccion'
               and btrim(coalesce(q2.enunciado, '')) <> ''
             order by random()
@@ -4910,66 +4786,6 @@ $$;
 -- los usan al asignar estado_publicacion = 'publicado'.
 -- ---------------------------------------------------------------------------
 
--- Inconveniente de una pregunta seleccion/verdadero_falso: enunciado, opciones
--- suficientes y distintas, solucion con una unica correcta y explicacion.
-create or replace function expotec_inconveniente_pregunta(p_pregunta_id uuid)
-returns text
-language plpgsql
-stable
-security definer
-set search_path = public
-as $$
-declare
-    v_pregunta record;
-    v_opciones integer;
-    v_opciones_distintas integer;
-    v_solucion record;
-begin
-    select * into v_pregunta
-    from preguntas where id = p_pregunta_id;
-
-    if v_pregunta.id is null then
-        return 'La pregunta no existe.';
-    end if;
-    if btrim(coalesce(v_pregunta.enunciado, '')) = '' then
-        return 'La pregunta necesita un enunciado';
-    end if;
-
-    select
-        count(*)::integer,
-        count(distinct btrim(texto))::integer
-    into v_opciones, v_opciones_distintas
-    from opciones
-    where pregunta_id = p_pregunta_id
-      and btrim(texto) <> '';
-
-    if v_opciones < 2 or v_opciones_distintas < 2 then
-        return 'La pregunta necesita al menos dos opciones distintas y sin texto vacio.';
-    end if;
-
-    select * into v_solucion from soluciones where pregunta_id = p_pregunta_id;
-
-    if v_solucion.id is null then
-        return 'La pregunta aún no tiene solución definida.';
-    end if;
-    if btrim(coalesce(v_solucion.explicacion, '')) = '' then
-        return 'La solución necesita una explicación';
-    end if;
-
-    if v_solucion.opcion_correcta_id is not null and (
-        not exists (
-            select 1 from opciones
-            where id = v_solucion.opcion_correcta_id
-              and pregunta_id = p_pregunta_id
-        )
-    ) then
-        return 'La opción correcta no pertenece a esta pregunta.';
-    end if;
-
-    return null;
-end;
-$$;
-
 -- Inconveniente de una leccion al publicarse: explicacion y al menos una
 -- pregunta publicada que ademas pase su propio validador.
 create or replace function expotec_inconveniente_leccion(p_leccion_id uuid)
@@ -5139,7 +4955,7 @@ begin
     from expotec_desafio_preguntas dp
     join preguntas q on q.id = dp.pregunta_id
     where dp.desafio_id = p_desafio_id
-      and q.estado_publicacion in ('publicado', 'borrador')
+      and q.estado_publicacion = 'publicado'
       and q.tipo = 'seleccion';
 
     if v_habilitadas < coalesce(v_desafio.cantidad_preguntas, 1) then
@@ -5153,7 +4969,7 @@ begin
         from expotec_desafio_preguntas dp
         join preguntas q on q.id = dp.pregunta_id
         where dp.desafio_id = p_desafio_id
-          and q.estado_publicacion in ('publicado', 'borrador')
+          and q.estado_publicacion = 'publicado'
           and q.tipo = 'seleccion'
     loop
         select coalesce((
@@ -6039,7 +5855,7 @@ begin
             select 1 from preguntas
             where id = v_pregunta
               and tipo = 'seleccion'
-              and estado_publicacion in ('publicado', 'borrador')
+              and estado_publicacion = 'publicado'
         ) then
             raise exception 'Hay preguntas que no habilitan: falta alguna, está oculta o no son de selección.';
         end if;
@@ -6504,3 +6320,1938 @@ join expotec_desafios d
 join preguntas q
     on q.id = uuid(md5('kodigo:preg:expo:' || v.clave))
 on conflict (desafio_id, pregunta_id) do nothing;
+
+-- ===========================================================================
+-- ETAPA 8 - Actividades ampliadas, progreso individual, logros y estadisticas
+--
+-- Este bloque se ejecuta al final del script para poder reemplazar funciones
+-- ya definidas sin duplicar la logica base. Es idempotente y no borra datos.
+-- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1. Tipos de actividad
+-- ---------------------------------------------------------------------------
+
+alter table preguntas drop constraint if exists preguntas_tipo_check;
+alter table preguntas
+add constraint preguntas_tipo_check check (tipo in (
+    'seleccion',
+    'verdadero_falso',
+    'completar_texto',
+    'completar_codigo',
+    'ordenar',
+    'relacionar',
+    'escribir_codigo',
+    'corregir_codigo',
+    'salida_codigo',
+    'predecir',
+    'bloques'
+));
+
+-- ---------------------------------------------------------------------------
+-- 2. Columnas nuevas (compatibles con bases existentes)
+-- ---------------------------------------------------------------------------
+
+alter table perfiles add column if not exists ultima_actividad_en date;
+
+alter table logros add column if not exists clave varchar(80);
+alter table logros add column if not exists criterio jsonb;
+alter table logros add column if not exists orden integer not null default 0;
+
+create unique index if not exists logros_clave_idx
+on logros (clave)
+where clave is not null;
+
+-- ---------------------------------------------------------------------------
+-- 3. Progreso individual de unidades
+--
+-- Las unidades siguen teniendo su estado editorial global (publicado,
+-- bloqueada, borrador...), pero el desbloqueo deja de modificarlo. Cada fila
+-- de progreso_unidades es una unidad habilitada para ESE usuario.
+-- ---------------------------------------------------------------------------
+
+create table if not exists progreso_unidades (
+    id uuid primary key default gen_random_uuid(),
+    usuario_id uuid not null references perfiles(id) on delete cascade,
+    unidad_id uuid not null references unidades(id) on delete cascade,
+    desbloqueada_en timestamptz not null default now(),
+    completada_en timestamptz,
+    constraint progreso_unidades_unique unique (usuario_id, unidad_id)
+);
+
+create index if not exists progreso_unidades_usuario_idx
+on progreso_unidades (usuario_id);
+
+alter table progreso_unidades enable row level security;
+
+drop policy if exists "progreso de unidades propio visible" on progreso_unidades;
+create policy "progreso de unidades propio visible"
+on progreso_unidades
+for select
+to authenticated
+using (usuario_id = auth.uid());
+
+-- Sin politicas de insert/update/delete: el unico camino de escritura es
+-- desbloquear_siguiente_unidad(), que es security definer.
+
+-- ---------------------------------------------------------------------------
+-- 4. Diccionario
+-- ---------------------------------------------------------------------------
+
+create table if not exists diccionario (
+    id uuid primary key default gen_random_uuid(),
+    termino varchar(80) not null,
+    definicion text not null,
+    categoria varchar(40) not null default 'general',
+    ejemplo text,
+    orden integer not null default 0,
+    created_at timestamptz not null default now(),
+    constraint diccionario_orden_check check (orden >= 0)
+);
+
+create unique index if not exists diccionario_termino_idx
+on diccionario (lower(termino));
+
+alter table diccionario enable row level security;
+
+drop policy if exists "diccionario publico" on diccionario;
+create policy "diccionario publico"
+on diccionario
+for select
+to anon, authenticated
+using (true);
+
+-- ---------------------------------------------------------------------------
+-- 5. Helpers de correccion
+-- ---------------------------------------------------------------------------
+
+create or replace function normalizar_codigo_respuesta(p_texto text)
+returns text
+language sql
+immutable
+as $$
+    select case
+        when p_texto is null then null
+        else btrim(regexp_replace(replace(p_texto, E'\r\n', E'\n'), '\s+', ' ', 'g'))
+    end;
+$$;
+
+create or replace function codigo_coincide_respuesta(
+    p_enviado text,
+    p_esperado text,
+    p_estricto boolean default true
+)
+returns boolean
+language sql
+immutable
+as $$
+    select normalizar_codigo_respuesta(
+               case when p_estricto then p_enviado else lower(p_enviado) end
+           ) = normalizar_codigo_respuesta(
+               case when p_estricto then p_esperado else lower(p_esperado) end
+           );
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 6. Correccion de las once modalidades
+-- ---------------------------------------------------------------------------
+
+create or replace function comprobar_respuesta(
+    p_pregunta_id uuid,
+    p_respuesta jsonb
+)
+returns table (
+    correcta boolean,
+    explicacion text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_tipo varchar;
+    v_datos jsonb;
+    v_opcion_correcta uuid;
+    v_solucion jsonb;
+    v_explicacion text;
+    v_respuesta jsonb;
+    v_valor jsonb;
+    v_correcta boolean := false;
+    v_blanco jsonb;
+    v_clave text;
+    v_esperado text;
+    v_estricto boolean;
+    v_orden_esperada jsonb;
+    v_orden_enviada jsonb;
+    v_longitud integer;
+    v_total_pares integer;
+    v_codigo text;
+    v_patron text;
+    v_soluciones jsonb;
+    v_requeridos jsonb;
+    v_prohibidos jsonb;
+    v_bloques jsonb;
+    v_ids_conocidos integer;
+begin
+    select p.tipo, p.datos, s.opcion_correcta_id, s.solucion, s.explicacion
+    into v_tipo, v_datos, v_opcion_correcta, v_solucion, v_explicacion
+    from preguntas p
+    join soluciones s on s.pregunta_id = p.id
+    where p.id = p_pregunta_id
+      and p.estado_publicacion = 'publicado';
+
+    if v_tipo is null then
+        raise exception 'La pregunta no existe o no esta publicada';
+    end if;
+
+    if p_respuesta is null then
+        return query select false, v_explicacion;
+        return;
+    end if;
+
+    if jsonb_typeof(p_respuesta) <> 'object' then
+        raise exception 'La respuesta debe ser un objeto JSON';
+    end if;
+
+    v_datos := coalesce(v_datos, '{}'::jsonb);
+    v_solucion := coalesce(v_solucion, '{}'::jsonb);
+
+    if v_tipo in ('seleccion', 'verdadero_falso') then
+        v_valor := p_respuesta -> 'opcion_id';
+
+        if v_valor is null then
+            raise exception 'La respuesta debe indicar la opcion elegida';
+        end if;
+
+        if not exists (
+            select 1 from opciones
+            where id = (v_valor #>> '{}')::uuid
+              and pregunta_id = p_pregunta_id
+        ) then
+            raise exception 'La opcion no pertenece a la pregunta';
+        end if;
+
+        v_correcta := v_opcion_correcta is not null
+            and v_opcion_correcta = (v_valor #>> '{}')::uuid;
+
+    elsif v_tipo = 'completar_texto' then
+        v_valor := p_respuesta -> 'valor';
+
+        if v_valor is null then
+            raise exception 'La respuesta debe indicar el valor escrito';
+        end if;
+
+        v_estricto := coalesce(v_datos ->> 'estricta', 'false') = 'true';
+        v_correcta := false;
+
+        -- La respuesta vive en soluciones (protegida por RLS). El fallback a
+        -- datos mantiene compatibles las actividades viejas del seed.
+        if v_solucion ->> 'valor' is not null then
+            v_correcta := texto_coincide_respuesta(
+                v_valor #>> '{}', v_solucion ->> 'valor', v_estricto
+            );
+        elsif v_datos ->> 'valor' is not null then
+            v_correcta := texto_coincide_respuesta(
+                v_valor #>> '{}', v_datos ->> 'valor', v_estricto
+            );
+        end if;
+
+        if not v_correcta then
+            for v_esperado in select jsonb_array_elements_text(coalesce(v_solucion -> 'alternativas', '[]'::jsonb)) loop
+                exit when v_correcta;
+                v_correcta := texto_coincide_respuesta(v_valor #>> '{}', v_esperado, v_estricto);
+            end loop;
+        end if;
+
+        if not v_correcta then
+            for v_esperado in select jsonb_array_elements_text(coalesce(v_datos -> 'alternativas', '[]'::jsonb)) loop
+                exit when v_correcta;
+                v_correcta := texto_coincide_respuesta(v_valor #>> '{}', v_esperado, v_estricto);
+            end loop;
+        end if;
+
+    elsif v_tipo = 'completar_codigo' then
+        v_respuesta := p_respuesta -> 'blancos';
+
+        if v_respuesta is null or jsonb_typeof(v_respuesta) <> 'object' then
+            raise exception 'La respuesta debe indicar los valores de los blancos';
+        end if;
+
+        v_correcta := true;
+
+        for v_blanco in select jsonb_array_elements(
+            coalesce(nullif(v_solucion -> 'blancos', 'null'::jsonb), v_datos -> 'blancos', '[]'::jsonb)
+        ) loop
+            exit when not v_correcta;
+            v_clave := v_blanco ->> 'clave';
+            v_valor := v_respuesta -> v_clave;
+            v_estricto := coalesce(v_blanco ->> 'estricta', 'true') = 'true';
+
+            if v_valor is null or jsonb_typeof(v_valor) <> 'string' then
+                v_correcta := false;
+            else
+                v_correcta := texto_coincide_respuesta(
+                    v_valor #>> '{}', v_blanco ->> 'valor', v_estricto
+                );
+                if not v_correcta then
+                    for v_esperado in select jsonb_array_elements_text(coalesce(v_blanco -> 'alternativas', '[]'::jsonb)) loop
+                        exit when v_correcta;
+                        v_correcta := texto_coincide_respuesta(v_valor #>> '{}', v_esperado, v_estricto);
+                    end loop;
+                end if;
+            end if;
+        end loop;
+
+    elsif v_tipo = 'ordenar' then
+        v_orden_esperada := v_solucion -> 'orden';
+        v_orden_enviada := p_respuesta -> 'orden';
+
+        if v_orden_esperada is null or v_orden_enviada is null
+           or jsonb_typeof(v_orden_enviada) <> 'array'
+        then
+            raise exception 'La respuesta debe indicar el orden de los elementos';
+        end if;
+
+        v_longitud := jsonb_array_length(v_orden_esperada);
+        v_correcta :=
+            v_longitud = jsonb_array_length(v_orden_enviada)
+            and v_orden_esperada = v_orden_enviada
+            and (
+                select count(*)
+                from jsonb_array_elements_text(v_orden_enviada) ids
+                join opciones o on o.id::text = ids and o.pregunta_id = p_pregunta_id
+            ) = v_longitud;
+
+    elsif v_tipo = 'relacionar' then
+        v_respuesta := p_respuesta -> 'pares';
+
+        if v_respuesta is null or jsonb_typeof(v_respuesta) <> 'array' then
+            raise exception 'La respuesta debe indicar los pares unidos';
+        end if;
+
+        v_total_pares := jsonb_array_length(coalesce(v_solucion -> 'pares', '[]'::jsonb));
+
+        v_correcta :=
+            v_total_pares > 0
+            and v_total_pares = jsonb_array_length(v_respuesta)
+            and (select count(distinct value ->> 'id_a') from jsonb_array_elements(v_respuesta)) = v_total_pares
+            and not exists (
+                select 1
+                from jsonb_array_elements(coalesce(v_solucion -> 'pares', '[]'::jsonb)) sp
+                where not exists (
+                    select 1
+                    from jsonb_array_elements(v_respuesta) re
+                    where re ->> 'id_a' = sp ->> 'id_a'
+                      and re ->> 'id_b' = sp ->> 'id_b'
+                )
+            );
+
+    elsif v_tipo in ('escribir_codigo', 'corregir_codigo') then
+        v_valor := p_respuesta -> 'codigo';
+
+        if v_valor is null or jsonb_typeof(v_valor) <> 'string' then
+            raise exception 'La respuesta debe incluir el codigo escrito';
+        end if;
+
+        v_codigo := v_valor #>> '{}';
+        v_estricto := coalesce(v_solucion ->> 'estricto', 'true') = 'true';
+        v_soluciones := coalesce(v_solucion -> 'soluciones', '[]'::jsonb);
+        v_requeridos := coalesce(v_solucion -> 'requeridos', '[]'::jsonb);
+        v_prohibidos := coalesce(v_solucion -> 'prohibidos', '[]'::jsonb);
+
+        if btrim(v_codigo) = '' then
+            v_correcta := false;
+        elsif jsonb_array_length(v_soluciones) > 0 then
+            for v_esperado in select jsonb_array_elements_text(v_soluciones) loop
+                exit when v_correcta;
+                v_correcta := codigo_coincide_respuesta(v_codigo, v_esperado, v_estricto);
+            end loop;
+        else
+            -- Sin soluciones exactas se evalua por criterios: todos los
+            -- patrones requeridos presentes y ninguno de los prohibidos.
+            v_correcta := jsonb_array_length(v_requeridos) > 0;
+            if v_correcta then
+                for v_patron in select jsonb_array_elements_text(v_requeridos) loop
+                    exit when not v_correcta;
+                    if v_codigo !~ v_patron then
+                        v_correcta := false;
+                    end if;
+                end loop;
+            end if;
+            if v_correcta then
+                for v_patron in select jsonb_array_elements_text(v_prohibidos) loop
+                    exit when not v_correcta;
+                    if v_codigo ~ v_patron then
+                        v_correcta := false;
+                    end if;
+                end loop;
+            end if;
+        end if;
+
+    elsif v_tipo in ('salida_codigo', 'predecir') then
+        -- Variante con opciones: se reutiliza la tabla opciones.
+        if p_respuesta ? 'opcion_id' then
+            if jsonb_typeof(p_respuesta -> 'opcion_id') <> 'string' then
+                raise exception 'La opcion elegida no es valida';
+            end if;
+
+            if not exists (
+                select 1 from opciones
+                where id = (p_respuesta ->> 'opcion_id')::uuid
+                  and pregunta_id = p_pregunta_id
+            ) then
+                raise exception 'La opcion no pertenece a la pregunta';
+            end if;
+
+            v_correcta := v_opcion_correcta is not null
+                and v_opcion_correcta = (p_respuesta ->> 'opcion_id')::uuid;
+
+        -- Variante de texto: se compara contra la solucion y alternativas.
+        elsif p_respuesta ? 'valor' then
+            if jsonb_typeof(p_respuesta -> 'valor') <> 'string' then
+                raise exception 'La respuesta escrita no es valida';
+            end if;
+
+            v_estricto := coalesce(v_solucion ->> 'estricta', 'false') = 'true';
+            v_correcta := false;
+
+            if v_solucion ->> 'valor' is not null then
+                v_correcta := texto_coincide_respuesta(
+                    p_respuesta ->> 'valor', v_solucion ->> 'valor', v_estricto
+                );
+            end if;
+
+            if not v_correcta then
+                for v_esperado in select jsonb_array_elements_text(coalesce(v_solucion -> 'alternativas', '[]'::jsonb)) loop
+                    exit when v_correcta;
+                    v_correcta := texto_coincide_respuesta(
+                        p_respuesta ->> 'valor', v_esperado, v_estricto
+                    );
+                end loop;
+            end if;
+        else
+            raise exception 'La respuesta debe indicar una opcion o un valor';
+        end if;
+
+    elsif v_tipo = 'bloques' then
+        v_bloques := p_respuesta -> 'bloques';
+        v_orden_esperada := v_solucion -> 'orden';
+
+        if v_bloques is null or v_orden_esperada is null
+           or jsonb_typeof(v_bloques) <> 'array'
+        then
+            raise exception 'La respuesta debe indicar los bloques elegidos';
+        end if;
+
+        v_longitud := jsonb_array_length(v_orden_esperada);
+
+        select count(*)::integer into v_ids_conocidos
+        from jsonb_array_elements_text(v_bloques) ids
+        join jsonb_array_elements(coalesce(v_datos -> 'bloques', '[]'::jsonb)) b
+          on b ->> 'id' = ids;
+
+        v_correcta :=
+            v_longitud = jsonb_array_length(v_bloques)
+            and v_ids_conocidos = v_longitud
+            and (select count(distinct value) from jsonb_array_elements_text(v_bloques)) = v_longitud
+            and v_orden_esperada = v_bloques;
+
+    else
+        raise exception 'Tipo de actividad no reconocido: %', v_tipo;
+    end if;
+
+    return query select v_correcta, v_explicacion;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 9. Nivel, racha, XP y logros
+-- ---------------------------------------------------------------------------
+
+create or replace function nivel_por_experiencia(p_experiencia integer)
+returns integer
+language sql
+immutable
+as $$
+    select greatest(1, 1 + floor(greatest(coalesce(p_experiencia, 0), 0) / 100)::integer);
+$$;
+
+-- Calcula el avance real de un criterio de logro. Se usa tanto para otorgar
+-- logros como para mostrar cuanto falta en la pantalla.
+create or replace function progreso_logro(
+    p_usuario_id uuid,
+    p_criterio jsonb
+)
+returns integer
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_tipo text;
+    v_valor integer := 0;
+begin
+    if p_usuario_id is null or p_criterio is null then
+        return 0;
+    end if;
+
+    v_tipo := p_criterio ->> 'tipo';
+
+    if v_tipo = 'lecciones_aprobadas' then
+        select count(*)::integer into v_valor
+        from progreso_lecciones
+        where usuario_id = p_usuario_id and aprobada;
+
+    elsif v_tipo = 'unidades_completadas' then
+        select count(*)::integer into v_valor
+        from progreso_unidades
+        where usuario_id = p_usuario_id and completada_en is not null;
+
+    elsif v_tipo = 'cursos_completados' then
+        select count(*)::integer into v_valor
+        from cursos c
+        where c.estado_publicacion = 'publicado'
+          and exists (
+              select 1
+              from unidades u
+              join lecciones l on l.unidad_id = u.id
+              where u.curso_id = c.id and l.estado_publicacion = 'publicado'
+          )
+          and not exists (
+              select 1
+              from unidades u
+              join lecciones l on l.unidad_id = u.id
+              where u.curso_id = c.id
+                and l.estado_publicacion = 'publicado'
+                and not exists (
+                    select 1 from progreso_lecciones p
+                    where p.usuario_id = p_usuario_id
+                      and p.leccion_id = l.id
+                      and p.aprobada
+                )
+          );
+
+    elsif v_tipo = 'actividades_realizadas' then
+        select count(*)::integer into v_valor
+        from respuestas_intento r
+        join intentos i on i.id = r.intento_id
+        where i.usuario_id = p_usuario_id;
+
+    elsif v_tipo = 'respuestas_correctas' then
+        select count(*)::integer into v_valor
+        from respuestas_intento r
+        join intentos i on i.id = r.intento_id
+        where i.usuario_id = p_usuario_id and r.correcta;
+
+    elsif v_tipo = 'racha_dias' then
+        select coalesce(max(racha_dias), 0)::integer into v_valor
+        from perfiles where id = p_usuario_id;
+
+    elsif v_tipo = 'nivel' then
+        select coalesce(max(nivel), 0)::integer into v_valor
+        from perfiles where id = p_usuario_id;
+
+    elsif v_tipo = 'experiencia' then
+        select coalesce(max(experiencia), 0)::integer into v_valor
+        from perfiles where id = p_usuario_id;
+
+    end if;
+
+    return coalesce(v_valor, 0);
+end;
+$$;
+
+create or replace function evaluar_logros(p_usuario_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_logro record;
+    v_objetivo integer;
+    v_actual integer;
+begin
+    if p_usuario_id is null then
+        return;
+    end if;
+
+    for v_logro in
+        select id, criterio, experiencia_recompensa
+        from logros
+        where clave is not null and criterio is not null
+    loop
+        v_objetivo := coalesce((v_logro.criterio ->> 'objetivo')::integer, 0);
+        v_actual := progreso_logro(p_usuario_id, v_logro.criterio);
+
+        if v_objetivo > 0 and v_actual >= v_objetivo then
+            insert into logros_usuario (usuario_id, logro_id)
+            values (p_usuario_id, v_logro.id)
+            on conflict (usuario_id, logro_id) do nothing;
+
+            -- La recompensa se paga una sola vez: el insert recien ocurre la
+            -- primera vez que se cumple el criterio.
+            if found and coalesce(v_logro.experiencia_recompensa, 0) > 0 then
+                update perfiles
+                set experiencia = experiencia + v_logro.experiencia_recompensa,
+                    nivel = nivel_por_experiencia(experiencia + v_logro.experiencia_recompensa),
+                    updated_at = now()
+                where id = p_usuario_id;
+            end if;
+        end if;
+    end loop;
+end;
+$$;
+
+create or replace function obtener_logros()
+returns table (
+    id uuid,
+    clave varchar,
+    nombre varchar,
+    descripcion text,
+    icono_url text,
+    experiencia_recompensa integer,
+    orden integer,
+    obtenido boolean,
+    obtenido_en timestamptz,
+    actual integer,
+    objetivo integer
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select l.id,
+           l.clave,
+           l.nombre,
+           l.descripcion,
+           l.icono_url,
+           l.experiencia_recompensa,
+           l.orden,
+           lu.id is not null as obtenido,
+           lu.obtenido_at as obtenido_en,
+           progreso_logro(auth.uid(), l.criterio) as actual,
+           coalesce((l.criterio ->> 'objetivo')::integer, 0) as objetivo
+    from logros l
+    left join logros_usuario lu
+      on lu.logro_id = l.id and lu.usuario_id = auth.uid()
+    where l.clave is not null
+    order by l.orden, l.nombre;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 10. Estadisticas reales
+-- ---------------------------------------------------------------------------
+
+create or replace function obtener_estadisticas()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_perfil record;
+    v_cursos_iniciados integer := 0;
+    v_cursos_completados integer := 0;
+    v_unidades_completadas integer := 0;
+    v_lecciones_completadas integer := 0;
+    v_lecciones_aprobadas integer := 0;
+    v_actividades integer := 0;
+    v_correctas integer := 0;
+    v_incorrectas integer := 0;
+    v_intentos integer := 0;
+    v_tiempo_seg integer := 0;
+    v_logros integer := 0;
+begin
+    if v_usuario is null then
+        return '{}'::jsonb;
+    end if;
+
+    select nivel, experiencia, racha_dias into v_perfil
+    from perfiles where id = v_usuario;
+
+    select count(distinct u.curso_id)::integer into v_cursos_iniciados
+    from progreso_lecciones p
+    join lecciones l on l.id = p.leccion_id
+    join unidades u on u.id = l.unidad_id
+    where p.usuario_id = v_usuario;
+
+    select count(*)::integer into v_cursos_completados
+    from cursos c
+    where c.estado_publicacion = 'publicado'
+      and exists (
+          select 1 from unidades u
+          join lecciones l on l.unidad_id = u.id
+          where u.curso_id = c.id and l.estado_publicacion = 'publicado'
+      )
+      and not exists (
+          select 1 from unidades u
+          join lecciones l on l.unidad_id = u.id
+          where u.curso_id = c.id
+            and l.estado_publicacion = 'publicado'
+            and not exists (
+                select 1 from progreso_lecciones p
+                where p.usuario_id = v_usuario
+                  and p.leccion_id = l.id
+                  and p.aprobada
+            )
+      );
+
+    select count(*)::integer into v_unidades_completadas
+    from progreso_unidades
+    where usuario_id = v_usuario and completada_en is not null;
+
+    select count(*) filter (where completada)::integer,
+           count(*) filter (where aprobada)::integer
+    into v_lecciones_completadas, v_lecciones_aprobadas
+    from progreso_lecciones
+    where usuario_id = v_usuario;
+
+    select count(*)::integer,
+           count(*) filter (where correcta)::integer,
+           count(*) filter (where not correcta)::integer
+    into v_actividades, v_correctas, v_incorrectas
+    from respuestas_intento r
+    join intentos i on i.id = r.intento_id
+    where i.usuario_id = v_usuario;
+
+    select count(*)::integer into v_intentos
+    from intentos where usuario_id = v_usuario;
+
+    select coalesce(sum(
+               greatest(extract(epoch from (finalizado_at - iniciado_at)), 0)
+           ), 0)::integer
+    into v_tiempo_seg
+    from intentos
+    where usuario_id = v_usuario and finalizado_at is not null;
+
+    select count(*)::integer into v_logros
+    from logros_usuario where usuario_id = v_usuario;
+
+    return jsonb_build_object(
+        'cursos_iniciados', v_cursos_iniciados,
+        'cursos_completados', v_cursos_completados,
+        'unidades_completadas', v_unidades_completadas,
+        'lecciones_completadas', v_lecciones_completadas,
+        'lecciones_aprobadas', v_lecciones_aprobadas,
+        'actividades_realizadas', v_actividades,
+        'respuestas_correctas', v_correctas,
+        'respuestas_incorrectas', v_incorrectas,
+        'precision', case when v_actividades > 0
+            then round(v_correctas::numeric * 100 / v_actividades, 1)
+            else 0 end,
+        'xp', coalesce(v_perfil.experiencia, 0),
+        'nivel', coalesce(v_perfil.nivel, 1),
+        'racha', coalesce(v_perfil.racha_dias, 0),
+        'intentos', v_intentos,
+        'tiempo_aprendizaje_seg', v_tiempo_seg,
+        'logros_obtenidos', v_logros
+    );
+end;
+$$;
+
+create or replace function obtener_revision()
+returns table (
+    leccion_id uuid,
+    leccion_titulo varchar,
+    unidad_id uuid,
+    unidad_nombre varchar,
+    curso_id uuid,
+    curso_nombre varchar,
+    mejor_porcentaje numeric,
+    ultimo_porcentaje numeric,
+    aprobada boolean,
+    intentos integer,
+    actualizado_en timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select p.leccion_id,
+           l.titulo,
+           u.id,
+           u.nombre,
+           c.id,
+           c.nombre,
+           p.mejor_porcentaje,
+           p.ultimo_porcentaje,
+           p.aprobada,
+           p.intentos,
+           p.updated_at
+    from progreso_lecciones p
+    join lecciones l on l.id = p.leccion_id
+    join unidades u on u.id = l.unidad_id
+    join cursos c on c.id = u.curso_id
+    where p.usuario_id = auth.uid()
+    order by p.updated_at desc;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 11. Amistades (funcionalidad minima real sobre la tabla existente)
+-- ---------------------------------------------------------------------------
+
+create or replace function obtener_amistades()
+returns table (
+    amistad_id uuid,
+    alias varchar,
+    nivel integer,
+    experiencia integer,
+    racha_dias integer,
+    estado varchar,
+    direccion varchar,
+    creada_en timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select a.id,
+           p.nombre_usuario,
+           p.nivel,
+           p.experiencia,
+           p.racha_dias,
+           a.estado,
+           case when a.usuario_id = auth.uid() then 'enviada' else 'recibida' end,
+           a.created_at
+    from amistades a
+    join perfiles p
+      on p.id = case when a.usuario_id = auth.uid() then a.amigo_id else a.usuario_id end
+    where a.usuario_id = auth.uid() or a.amigo_id = auth.uid()
+    order by a.estado, a.created_at desc;
+$$;
+
+create or replace function enviar_solicitud_amistad(p_alias text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_usuario uuid := auth.uid();
+    v_amigo uuid;
+    v_id uuid;
+begin
+    if v_usuario is null then
+        raise exception 'Se necesita una sesion para enviar solicitudes';
+    end if;
+
+    if btrim(coalesce(p_alias, '')) = '' then
+        raise exception 'Indica el nombre de usuario';
+    end if;
+
+    select id into v_amigo
+    from perfiles
+    where lower(nombre_usuario) = lower(btrim(p_alias));
+
+    if v_amigo is null then
+        raise exception 'No encontramos a esa persona';
+    end if;
+
+    if v_amigo = v_usuario then
+        raise exception 'No puedes agregarte a ti mismo';
+    end if;
+
+    if exists (
+        select 1 from amistades
+        where (usuario_id = v_usuario and amigo_id = v_amigo)
+           or (usuario_id = v_amigo and amigo_id = v_usuario)
+    ) then
+        raise exception 'Ya existe una solicitud o amistad con esa persona';
+    end if;
+
+    insert into amistades (usuario_id, amigo_id, estado)
+    values (v_usuario, v_amigo, 'pendiente')
+    returning id into v_id;
+
+    return v_id;
+end;
+$$;
+
+create or replace function responder_solicitud_amistad(
+    p_amistad_id uuid,
+    p_aceptar boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    if auth.uid() is null then
+        raise exception 'Se necesita una sesion para responder solicitudes';
+    end if;
+
+    update amistades
+    set estado = case when p_aceptar then 'aceptada' else 'rechazada' end
+    where id = p_amistad_id
+      and amigo_id = auth.uid()
+      and estado = 'pendiente';
+
+    if not found then
+        raise exception 'La solicitud no existe o no te pertenece';
+    end if;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 12. Finalizar intento: XP una sola vez, racha, nivel y logros
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 13. Validacion y administracion de todas las modalidades
+-- ---------------------------------------------------------------------------
+
+create or replace function expotec_inconveniente_pregunta(p_pregunta_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_pregunta record;
+    v_opciones integer;
+    v_opciones_distintas integer;
+    v_solucion record;
+    v_total integer;
+begin
+    select * into v_pregunta
+    from preguntas where id = p_pregunta_id;
+
+    if v_pregunta.id is null then
+        return 'La actividad no existe.';
+    end if;
+    if btrim(coalesce(v_pregunta.enunciado, '')) = '' then
+        return 'La actividad necesita un enunciado';
+    end if;
+
+    select * into v_solucion
+    from soluciones where pregunta_id = p_pregunta_id;
+
+    if v_solucion.id is null then
+        return 'La actividad necesita una solucion configurada';
+    end if;
+    if btrim(coalesce(v_solucion.explicacion, '')) = '' then
+        return 'La actividad necesita una explicacion';
+    end if;
+
+    select
+        count(*)::integer,
+        count(distinct btrim(texto))::integer
+    into v_opciones, v_opciones_distintas
+    from opciones
+    where pregunta_id = p_pregunta_id
+      and btrim(texto) <> '';
+
+    if v_pregunta.tipo in ('seleccion', 'verdadero_falso') then
+        if v_opciones < 2 or v_opciones_distintas < 2 then
+            return 'La actividad necesita al menos dos opciones distintas y sin texto vacio.';
+        end if;
+        if v_pregunta.tipo = 'verdadero_falso' and v_opciones <> 2 then
+            return 'La actividad de verdadero o falso necesita exactamente dos opciones.';
+        end if;
+        if v_solucion.opcion_correcta_id is null or not exists (
+            select 1 from opciones
+            where id = v_solucion.opcion_correcta_id and pregunta_id = p_pregunta_id
+        ) then
+            return 'La actividad necesita marcar una opcion correcta.';
+        end if;
+
+    elsif v_pregunta.tipo = 'completar_texto' then
+        if coalesce(v_pregunta.datos ->> 'valor', '') = ''
+           and coalesce(v_solucion.solucion ->> 'valor', '') = ''
+           and coalesce(jsonb_array_length(v_pregunta.datos -> 'alternativas'), 0) = 0
+           and coalesce(jsonb_array_length(v_solucion.solucion -> 'alternativas'), 0) = 0 then
+            return 'La actividad necesita un valor o alternativas para corregir.';
+        end if;
+
+    elsif v_pregunta.tipo = 'completar_codigo' then
+        if coalesce(v_pregunta.datos ->> 'codigo', '') = '' then
+            return 'La actividad necesita el codigo base.';
+        end if;
+        v_total := coalesce(jsonb_array_length(
+            coalesce(nullif(v_solucion.solucion -> 'blancos', 'null'::jsonb), v_pregunta.datos -> 'blancos')
+        ), 0);
+        if v_total = 0 then
+            return 'La actividad necesita al menos un blanco.';
+        end if;
+        if exists (
+            select 1
+            from jsonb_array_elements(
+                coalesce(nullif(v_solucion.solucion -> 'blancos', 'null'::jsonb), v_pregunta.datos -> 'blancos')
+            ) b
+            where b ->> 'clave' is null
+              or btrim(coalesce(b ->> 'valor', '')) = ''
+        ) then
+            return 'Cada blanco necesita una respuesta valida.';
+        end if;
+        if (
+            select count(distinct b ->> 'clave')
+            from jsonb_array_elements(
+                coalesce(nullif(v_solucion.solucion -> 'blancos', 'null'::jsonb), v_pregunta.datos -> 'blancos')
+            ) b
+        ) <> v_total then
+            return 'Las claves de los blancos no pueden repetirse.';
+        end if;
+        if exists (
+            select 1
+            from jsonb_array_elements(
+                coalesce(nullif(v_solucion.solucion -> 'blancos', 'null'::jsonb), v_pregunta.datos -> 'blancos')
+            ) b
+            where position('{' || (b ->> 'clave') || '}' in coalesce(v_pregunta.datos ->> 'codigo', '')) = 0
+        ) then
+            return 'Cada blanco debe aparecer en el codigo como {clave}.';
+        end if;
+
+    elsif v_pregunta.tipo = 'ordenar' then
+        if v_opciones < 2 then
+            return 'La actividad necesita al menos dos elementos para ordenar.';
+        end if;
+        v_total := coalesce(jsonb_array_length(v_solucion.solucion -> 'orden'), 0);
+        if v_total <> v_opciones then
+            return 'La solucion de orden debe incluir todos los elementos.';
+        end if;
+        if jsonb_typeof(v_solucion.solucion -> 'orden') <> 'array' then
+            return 'La solucion de orden debe ser una lista.';
+        end if;
+        if (select count(distinct value) from jsonb_array_elements_text(v_solucion.solucion -> 'orden')) <> v_total then
+            return 'La solucion de orden no puede repetir elementos.';
+        end if;
+        if exists (
+            select 1
+            from jsonb_array_elements_text(v_solucion.solucion -> 'orden') ids
+            where not exists (
+                select 1
+                from opciones o
+                where o.id::text = ids and o.pregunta_id = p_pregunta_id
+            )
+        ) then
+            return 'La solucion de orden incluye elementos que no existen en la actividad.';
+        end if;
+
+    elsif v_pregunta.tipo = 'relacionar' then
+        if coalesce(jsonb_array_length(v_pregunta.datos -> 'columna_a'), 0) = 0
+           or coalesce(jsonb_array_length(v_pregunta.datos -> 'columna_b'), 0) = 0 then
+            return 'La actividad necesita las dos columnas.';
+        end if;
+        if coalesce(jsonb_array_length(v_solucion.solucion -> 'pares'), 0) = 0 then
+            return 'La actividad necesita al menos un par correcto.';
+        end if;
+        if exists (
+            select 1
+            from jsonb_array_elements(v_solucion.solucion -> 'pares') par
+            where not exists (
+                select 1
+                from jsonb_array_elements(v_pregunta.datos -> 'columna_a') a
+                where a ->> 'id' = par ->> 'id_a'
+            ) or not exists (
+                select 1
+                from jsonb_array_elements(v_pregunta.datos -> 'columna_b') b
+                where b ->> 'id' = par ->> 'id_b'
+            )
+        ) then
+            return 'Los pares de la solucion deben unir elementos de las dos columnas.';
+        end if;
+        if (
+            select count(distinct par ->> 'id_a') + count(distinct par ->> 'id_b')
+            from jsonb_array_elements(v_solucion.solucion -> 'pares') par
+        ) <> 2 * jsonb_array_length(v_solucion.solucion -> 'pares') then
+            return 'Cada elemento solo puede estar en un par.';
+        end if;
+
+    elsif v_pregunta.tipo in ('escribir_codigo', 'corregir_codigo') then
+        if v_pregunta.tipo = 'corregir_codigo'
+           and coalesce(v_pregunta.datos ->> 'codigo_inicial', '') = '' then
+            return 'La actividad necesita el codigo con errores.';
+        end if;
+        if coalesce(jsonb_array_length(v_solucion.solucion -> 'soluciones'), 0) = 0
+           and coalesce(jsonb_array_length(v_solucion.solucion -> 'requeridos'), 0) = 0 then
+            return 'La actividad necesita soluciones aceptadas o criterios requeridos.';
+        end if;
+        -- Los patrones deben ser expresiones regulares validas: un patron
+        -- invalido llegaria al corrector y fallaria en plena clase.
+        declare
+            v_patron text;
+        begin
+            for v_patron in
+                select jsonb_array_elements_text(coalesce(v_solucion.solucion -> 'requeridos', '[]'::jsonb))
+                union all
+                select jsonb_array_elements_text(coalesce(v_solucion.solucion -> 'prohibidos', '[]'::jsonb))
+            loop
+                begin
+                    perform 'kodigo' ~ v_patron;
+                exception when others then
+                    return 'Un patron de evaluacion no es una expresion regular valida: '
+                        || left(v_patron, 40);
+                end;
+            end loop;
+        end;
+
+    elsif v_pregunta.tipo in ('salida_codigo', 'predecir') then
+        if coalesce(v_pregunta.datos ->> 'codigo', '') = '' then
+            return 'La actividad necesita el codigo a analizar.';
+        end if;
+        if coalesce(v_pregunta.datos ->> 'modo', 'texto') = 'opciones' then
+            if v_opciones < 2 or v_opciones_distintas < 2 then
+                return 'La actividad necesita al menos dos opciones distintas.';
+            end if;
+            if v_solucion.opcion_correcta_id is null or not exists (
+                select 1
+                from opciones
+                where id = v_solucion.opcion_correcta_id
+                  and pregunta_id = p_pregunta_id
+            ) then
+                return 'La actividad necesita marcar una opcion correcta.';
+            end if;
+        else
+            if coalesce(v_solucion.solucion ->> 'valor', '') = ''
+               and coalesce(jsonb_array_length(v_solucion.solucion -> 'alternativas'), 0) = 0 then
+                return 'La actividad necesita un valor esperado o alternativas.';
+            end if;
+        end if;
+
+    elsif v_pregunta.tipo = 'bloques' then
+        if coalesce(jsonb_array_length(v_pregunta.datos -> 'bloques'), 0) < 2 then
+            return 'La actividad necesita al menos dos bloques disponibles.';
+        end if;
+        v_total := coalesce(jsonb_array_length(v_solucion.solucion -> 'orden'), 0);
+        if v_total < 1 then
+            return 'La actividad necesita el orden correcto de los bloques.';
+        end if;
+        if exists (
+            select 1
+            from jsonb_array_elements_text(v_solucion.solucion -> 'orden') ids
+            where not exists (
+                select 1
+                from jsonb_array_elements(v_pregunta.datos -> 'bloques') b
+                where b ->> 'id' = ids
+            )
+        ) then
+            return 'El orden correcto incluye bloques que no estan disponibles.';
+        end if;
+        if (select count(distinct value) from jsonb_array_elements_text(v_solucion.solucion -> 'orden')) <> v_total then
+            return 'La solucion no puede repetir bloques.';
+        end if;
+        if (select count(distinct b ->> 'id') from jsonb_array_elements(v_pregunta.datos -> 'bloques') b)
+           <> jsonb_array_length(v_pregunta.datos -> 'bloques') then
+            return 'Los ids de los bloques no pueden repetirse.';
+        end if;
+        if exists (
+            select 1
+            from jsonb_array_elements(v_pregunta.datos -> 'bloques') b
+            where btrim(coalesce(b ->> 'id', '')) = '' or btrim(coalesce(b ->> 'texto', '')) = ''
+        ) then
+            return 'Cada bloque necesita un id y un texto.';
+        end if;
+    end if;
+
+    return null;
+end;
+$$;
+
+-- Guarda o actualiza una actividad de cualquier modalidad. Las opciones solo
+-- se tocan si la actividad no tiene respuestas registradas, para no romper el
+-- historial de los estudiantes.
+create or replace function expotec_admin_guardar_actividad(
+    p_id uuid,
+    p_datos jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_id uuid := p_id;
+    v_tipo text;
+    v_leccion uuid;
+    v_enunciado text;
+    v_explicacion text;
+    v_datos_pub jsonb;
+    v_solucion jsonb;
+    v_estado text;
+    v_orden integer;
+    v_opciones jsonb;
+    v_indice integer;
+    v_total integer;
+    v_inconveniente text;
+    v_usar_opciones boolean;
+    v_opcion_id uuid;
+begin
+    perform expotec_guard_admin();
+
+    v_tipo := coalesce(p_datos ->> 'tipo', 'seleccion');
+    if v_tipo not in (
+        'seleccion', 'verdadero_falso', 'completar_texto', 'completar_codigo',
+        'ordenar', 'relacionar', 'escribir_codigo', 'corregir_codigo',
+        'salida_codigo', 'predecir', 'bloques'
+    ) then
+        raise exception 'El tipo de actividad no existe: %.', v_tipo;
+    end if;
+
+    v_enunciado := btrim(coalesce(p_datos ->> 'enunciado', ''));
+    if v_enunciado = '' then
+        raise exception 'La actividad necesita un enunciado.';
+    end if;
+
+    v_explicacion := coalesce(p_datos ->> 'explicacion', '');
+    v_datos_pub := coalesce(p_datos -> 'datos', '{}'::jsonb);
+    v_solucion := coalesce(p_datos -> 'solucion', '{}'::jsonb);
+    v_estado := coalesce(p_datos ->> 'estado_publicacion', 'borrador');
+
+    if v_estado not in ('borrador', 'publicado', 'oculta') then
+        raise exception 'El estado de la actividad no es valido.';
+    end if;
+
+    v_usar_opciones := v_tipo in ('seleccion', 'verdadero_falso', 'ordenar')
+        or (v_tipo in ('salida_codigo', 'predecir')
+            and coalesce(v_datos_pub ->> 'modo', 'texto') = 'opciones');
+
+    if v_id is null then
+        v_leccion := (p_datos ->> 'leccion_id')::uuid;
+        if v_leccion is null then
+            raise exception 'La actividad necesita la clase a la que pertenece.';
+        end if;
+
+        select coalesce(max(orden) + 1, 0)::integer into v_orden
+        from preguntas where leccion_id = v_leccion;
+
+        insert into preguntas (leccion_id, enunciado, tipo, datos, orden, estado_publicacion)
+        values (v_leccion, v_enunciado, v_tipo, v_datos_pub, v_orden, 'borrador')
+        returning id into v_id;
+    else
+        select leccion_id into v_leccion from preguntas where id = v_id;
+        if v_leccion is null then
+            raise exception 'La actividad no existe.';
+        end if;
+
+        update preguntas
+        set enunciado = v_enunciado,
+            tipo = v_tipo,
+            datos = v_datos_pub,
+            estado_publicacion = 'borrador'
+        where id = v_id;
+    end if;
+
+    if v_usar_opciones then
+        v_opciones := coalesce(p_datos -> 'opciones', '[]'::jsonb);
+        if jsonb_typeof(v_opciones) <> 'array' or jsonb_array_length(v_opciones) < 2 then
+            raise exception 'La actividad necesita al menos dos opciones.';
+        end if;
+
+        v_indice := coalesce((p_datos ->> 'indice_correcta')::integer, 0);
+        v_total := jsonb_array_length(v_opciones);
+
+        if v_tipo = 'ordenar' then
+            v_indice := -1;
+        elsif v_indice < 0 or v_indice >= v_total then
+            raise exception 'La opcion correcta no es valida.';
+        end if;
+
+        if exists (select 1 from respuestas_intento where pregunta_id = v_id) then
+            raise exception 'No se pueden cambiar las opciones de una actividad que ya tiene respuestas. Crea una actividad nueva.';
+        end if;
+
+        delete from soluciones where pregunta_id = v_id;
+        delete from opciones where pregunta_id = v_id;
+
+        insert into opciones (pregunta_id, texto, orden)
+        select v_id, btrim(value), (row_number() over () - 1)::integer
+        from jsonb_array_elements_text(v_opciones);
+
+        if v_tipo = 'ordenar' then
+            insert into soluciones (pregunta_id, solucion, explicacion)
+            values (
+                v_id,
+                jsonb_build_object('orden', (
+                    select jsonb_agg(id order by orden)
+                    from opciones where pregunta_id = v_id
+                )),
+                v_explicacion
+            );
+        else
+            select id into v_opcion_id
+            from opciones
+            where pregunta_id = v_id and orden = v_indice;
+
+            insert into soluciones (pregunta_id, opcion_correcta_id, solucion, explicacion)
+            values (v_id, v_opcion_id, v_solucion, v_explicacion);
+        end if;
+    else
+        if exists (select 1 from respuestas_intento where pregunta_id = v_id) then
+            raise exception 'La actividad ya tiene respuestas de estudiantes. Crea una actividad nueva en lugar de editarla.';
+        end if;
+        -- Al pasar de una modalidad con opciones a una sin opciones se borran
+        -- las filas huerfanas para que no queden opciones obsoletas visibles.
+        delete from opciones where pregunta_id = v_id;
+        insert into soluciones (pregunta_id, opcion_correcta_id, solucion, explicacion)
+        values (v_id, null, v_solucion, v_explicacion)
+        on conflict (pregunta_id) do update
+            set opcion_correcta_id = null,
+                solucion = excluded.solucion,
+                explicacion = excluded.explicacion;
+    end if;
+
+    if v_estado = 'publicado' then
+        v_inconveniente := expotec_inconveniente_pregunta(v_id);
+        if v_inconveniente is not null then
+            raise exception '%', v_inconveniente;
+        end if;
+        update preguntas set estado_publicacion = 'publicado' where id = v_id;
+    elsif v_estado = 'oculta' then
+        update preguntas set estado_publicacion = 'oculta' where id = v_id;
+    end if;
+
+    return v_id;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 14. Backfill de desbloqueos para usuarios existentes
+-- ---------------------------------------------------------------------------
+
+-- Ultima actividad real de cada perfil: la racha nueva se apoya en esta fecha
+-- para no reiniciar rachas ya ganadas al migrar.
+update perfiles p
+set ultima_actividad_en = sub.ultimo
+from (
+    select usuario_id, max(finalizado_at)::date as ultimo
+    from intentos
+    where finalizado_at is not null
+    group by usuario_id
+) sub
+where sub.usuario_id = p.id
+  and p.ultima_actividad_en is null;
+
+insert into progreso_unidades (usuario_id, unidad_id, completada_en)
+select p.id, u.id,
+       case
+           when not exists (
+               select 1
+               from lecciones l
+               where l.unidad_id = u.id
+                 and l.estado_publicacion = 'publicado'
+                 and not exists (
+                     select 1 from progreso_lecciones pl
+                     where pl.usuario_id = p.id
+                       and pl.leccion_id = l.id
+                       and pl.aprobada
+                 )
+           ) then now()
+           else null
+       end
+from perfiles p
+join unidades u on true
+where u.estado_publicacion = 'publicado'
+   or (
+       u.estado_publicacion = 'bloqueada'
+       and not exists (
+           select 1
+           from lecciones l
+           where l.unidad_id = u.id
+             and l.estado_publicacion = 'publicado'
+             and not exists (
+                 select 1 from progreso_lecciones pl
+                 where pl.usuario_id = p.id
+                   and pl.leccion_id = l.id
+                   and pl.aprobada
+             )
+       )
+   )
+on conflict (usuario_id, unidad_id) do nothing;
+
+-- ---------------------------------------------------------------------------
+-- 15. Permisos
+-- ---------------------------------------------------------------------------
+
+revoke all on function normalizar_codigo_respuesta(text) from public;
+revoke all on function codigo_coincide_respuesta(text, text, boolean) from public;
+revoke all on function nivel_por_experiencia(integer) from public;
+revoke all on function progreso_logro(uuid, jsonb) from public;
+revoke all on function evaluar_logros(uuid) from public;
+
+revoke all on function obtener_logros() from public;
+grant execute on function obtener_logros() to authenticated;
+
+revoke all on function obtener_estadisticas() from public;
+grant execute on function obtener_estadisticas() to authenticated;
+
+revoke all on function obtener_revision() from public;
+grant execute on function obtener_revision() to authenticated;
+
+revoke all on function obtener_amistades() from public;
+grant execute on function obtener_amistades() to authenticated;
+
+revoke all on function enviar_solicitud_amistad(text) from public;
+grant execute on function enviar_solicitud_amistad(text) to authenticated;
+
+revoke all on function responder_solicitud_amistad(uuid, boolean) from public;
+grant execute on function responder_solicitud_amistad(uuid, boolean) to authenticated;
+
+revoke all on function expotec_admin_guardar_actividad(uuid, jsonb) from public;
+grant execute on function expotec_admin_guardar_actividad(uuid, jsonb) to authenticated;
+
+-- ===========================================================================
+-- 16. Logros, diccionario y consulta de unidades desbloqueadas
+-- ===========================================================================
+
+-- Unidades que ESTE usuario tiene habilitadas. La pantalla de curso la usa
+-- para decidir si puede entrar; el servidor la vuelve a validar al iniciar
+-- un intento.
+create or replace function obtener_unidades_desbloqueadas()
+returns table (
+    unidad_id uuid,
+    completada boolean
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select pu.unidad_id, pu.completada_en is not null
+    from progreso_unidades pu
+    where pu.usuario_id = auth.uid();
+$$;
+
+revoke all on function obtener_unidades_desbloqueadas() from public;
+grant execute on function obtener_unidades_desbloqueadas() to authenticated;
+
+create or replace function obtener_diccionario()
+returns table (
+    termino varchar,
+    definicion text,
+    categoria varchar,
+    ejemplo text
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select d.termino, d.definicion, d.categoria, d.ejemplo
+    from diccionario d
+    order by d.categoria, d.orden, d.termino;
+$$;
+
+revoke all on function obtener_diccionario() from public;
+grant execute on function obtener_diccionario() to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 16.1 Catalogo de logros (se auto-otorgan al cerrar un intento)
+-- ---------------------------------------------------------------------------
+
+insert into logros (nombre, descripcion, icono_url, experiencia_recompensa, clave, criterio, orden)
+values
+(
+    'Primer paso',
+    'Aprobá tu primera lección.',
+    'looks_one',
+    10,
+    'primera_leccion',
+    '{"tipo": "lecciones_aprobadas", "objetivo": 1}'::jsonb,
+    10
+),
+(
+    'Constancia',
+    'Aprobá 5 lecciones.',
+    'trending_up',
+    25,
+    'cinco_lecciones',
+    '{"tipo": "lecciones_aprobadas", "objetivo": 5}'::jsonb,
+    20
+),
+(
+    'Estudioso',
+    'Aprobá 10 lecciones.',
+    'school',
+    50,
+    'diez_lecciones',
+    '{"tipo": "lecciones_aprobadas", "objetivo": 10}'::jsonb,
+    30
+),
+(
+    'Unidad conquistada',
+    'Completá tu primera unidad.',
+    'flag',
+    40,
+    'primera_unidad',
+    '{"tipo": "unidades_completadas", "objetivo": 1}'::jsonb,
+    40
+),
+(
+    'Explorador',
+    'Completá 3 unidades.',
+    'map',
+    80,
+    'tres_unidades',
+    '{"tipo": "unidades_completadas", "objetivo": 3}'::jsonb,
+    50
+),
+(
+    'Curso completo',
+    'Aprobá todas las lecciones publicadas de un curso.',
+    'workspace_premium',
+    150,
+    'curso_completado',
+    '{"tipo": "cursos_completados", "objetivo": 1}'::jsonb,
+    60
+),
+(
+    'Cincuenta prácticas',
+    'Respondé 50 actividades.',
+    'bolt',
+    50,
+    'cincuenta_actividades',
+    '{"tipo": "actividades_realizadas", "objetivo": 50}'::jsonb,
+    70
+),
+(
+    'Cien aciertos',
+    'Acumulá 100 respuestas correctas.',
+    'verified',
+    100,
+    'cien_correctas',
+    '{"tipo": "respuestas_correctas", "objetivo": 100}'::jsonb,
+    80
+),
+(
+    'Racha de 3',
+    'Practicá 3 días seguidos.',
+    'local_fire_department',
+    30,
+    'racha_3',
+    '{"tipo": "racha_dias", "objetivo": 3}'::jsonb,
+    90
+),
+(
+    'Racha de 7',
+    'Practicá 7 días seguidos.',
+    'whatshot',
+    70,
+    'racha_7',
+    '{"tipo": "racha_dias", "objetivo": 7}'::jsonb,
+    100
+),
+(
+    'Nivel 5',
+    'Alcanzá el nivel 5.',
+    'military_tech',
+    100,
+    'nivel_5',
+    '{"tipo": "nivel", "objetivo": 5}'::jsonb,
+    110
+),
+(
+    '500 de experiencia',
+    'Acumulá 500 puntos de experiencia.',
+    'stars',
+    100,
+    'xp_500',
+    '{"tipo": "experiencia", "objetivo": 500}'::jsonb,
+    120
+)
+on conflict (nombre) do update
+set descripcion = excluded.descripcion,
+    icono_url = excluded.icono_url,
+    experiencia_recompensa = excluded.experiencia_recompensa,
+    clave = excluded.clave,
+    criterio = excluded.criterio,
+    orden = excluded.orden;
+
+-- ---------------------------------------------------------------------------
+-- 16.2 Glosario real (diccionario del curso de JavaScript)
+-- ---------------------------------------------------------------------------
+
+insert into diccionario (termino, definicion, categoria, ejemplo, orden)
+values
+('variable', 'Espacio con nombre donde se guarda un valor que puede cambiar durante el programa.', 'Bases', 'let edad = 15;', 1),
+('constante', 'Variable cuyo valor no se reasigna después de declararla. Se declara con const.', 'Bases', 'const nombre = "Fury";', 2),
+('string', 'Tipo de dato de texto. Se escribe entre comillas simples, dobles o backticks.', 'Tipos de dato', '"Kodigo"', 3),
+('number', 'Tipo de dato numérico. Incluye enteros y decimales.', 'Tipos de dato', '42 / 3.14', 4),
+('boolean', 'Tipo de dato que solo puede ser true o false.', 'Tipos de dato', 'let activo = true;', 5),
+('null', 'Valor que representa la ausencia intencional de un dato.', 'Tipos de dato', 'let dato = null;', 6),
+('undefined', 'Valor que tiene una variable declarada a la que todavía no se le asignó nada.', 'Tipos de dato', 'let x; // undefined', 7),
+('array', 'Lista ordenada de valores a los que se accede por su índice, empezando en 0.', 'Estructuras', 'const notas = [8, 9, 10];', 8),
+('objeto', 'Estructura que guarda datos con nombre (propiedades) y funciones (métodos).', 'Estructuras', 'const perro = { nombre: "Fury" };', 9),
+('propiedad', 'Par nombre-valor dentro de un objeto.', 'Estructuras', 'perro.nombre', 10),
+('método', 'Función que pertenece a un objeto o a un tipo de dato.', 'Estructuras', '"kodigo".toUpperCase()', 11),
+('función', 'Bloque de código reutilizable que recibe datos y puede devolver un resultado.', 'Funciones', 'function sumar(a, b) { return a + b; }', 12),
+('parámetro', 'Nombre del dato que recibe una función en su definición.', 'Funciones', 'function saludar(nombre) { }', 13),
+('argumento', 'Valor concreto que se pasa a una función al llamarla.', 'Funciones', 'saludar("Ana")', 14),
+('retorno', 'Valor que devuelve una función con la palabra clave return.', 'Funciones', 'return total;', 15),
+('operador', 'Símbolo que realiza una operación entre valores: suma, comparación, lógica.', 'Operadores', 'a + b, a === b, a && b', 16),
+('condicional', 'Estructura que decide qué camino ejecutar según una condición.', 'Control de flujo', 'if (edad >= 18) { }', 17),
+('bucle', 'Estructura que repite un bloque de código mientras se cumpla una condición.', 'Control de flujo', 'for (let i = 0; i < 3; i++) { }', 18),
+('índice', 'Posición numérica de un elemento dentro de un array o string.', 'Estructuras', 'notas[0]', 19),
+('expresión', 'Combinación de valores y operadores que produce un resultado.', 'Bases', '2 * (3 + 4)', 20),
+('bloque', 'Conjunto de instrucciones agrupadas entre llaves.', 'Bases', '{ console.log("hola"); }', 21),
+('consola', 'Herramienta para mostrar mensajes y revisar resultados mientras programás.', 'Bases', 'console.log("hola");', 22)
+on conflict (lower(termino)) do update
+set definicion = excluded.definicion,
+    categoria = excluded.categoria,
+    ejemplo = excluded.ejemplo,
+    orden = excluded.orden;
+
+-- ===========================================================================
+-- 17. Proteccion de respuestas historicas
+--
+-- Las actividades viejas guardaban el valor correcto dentro de preguntas.datos,
+-- que es legible por cualquiera con la pregunta publicada. Se mueve la
+-- respuesta a soluciones (que tiene RLS sin policies de lectura) y se limpia
+-- datos. La correccion mantiene el fallback para no romper nada.
+-- ===========================================================================
+
+update soluciones s
+set solucion = coalesce(nullif(s.solucion, 'null'::jsonb), '{}'::jsonb)
+    || jsonb_build_object(
+        'valor', p.datos -> 'valor',
+        'alternativas', coalesce(p.datos -> 'alternativas', '[]'::jsonb)
+    )
+from preguntas p
+where p.id = s.pregunta_id
+  and p.tipo = 'completar_texto'
+  and p.datos ? 'valor'
+  and not (coalesce(s.solucion, '{}'::jsonb) ? 'valor');
+
+update preguntas p
+set datos = p.datos - 'valor' - 'alternativas'
+where p.tipo = 'completar_texto'
+  and (p.datos ? 'valor' or p.datos ? 'alternativas')
+  and exists (
+      select 1 from soluciones s
+      where s.pregunta_id = p.id and s.solucion ? 'valor'
+  );
+
+update soluciones s
+set solucion = coalesce(nullif(s.solucion, 'null'::jsonb), '{}'::jsonb)
+    || jsonb_build_object('blancos', p.datos -> 'blancos')
+from preguntas p
+where p.id = s.pregunta_id
+  and p.tipo = 'completar_codigo'
+  and p.datos ? 'blancos'
+  and not (coalesce(s.solucion, '{}'::jsonb) ? 'blancos');
+
+update preguntas p
+set datos = p.datos - 'blancos'
+where p.tipo = 'completar_codigo'
+  and p.datos ? 'blancos'
+  and exists (
+      select 1 from soluciones s
+      where s.pregunta_id = p.id and s.solucion ? 'blancos'
+  );
+
+-- ===========================================================================
+-- 18. Practica ampliada de JavaScript (nuevas modalidades)
+--
+-- Se agrega en un bloque aparte para no alterar el seed original de 53
+-- actividades. Cada leccion suma practica con escribir_codigo,
+-- corregir_codigo, salida_codigo, predecir, bloques y completar_*, con
+-- dificultad creciente por unidad. Las respuestas viven en soluciones.
+-- ===========================================================================
+
+with lecciones_num as (
+  select id, row_number() over (order by id) as n
+  from lecciones
+  where id between '30000000-0000-0000-0000-000000000001'::uuid
+               and '30000000-0000-0000-0000-000000000010'::uuid
+)
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion)
+select
+  uuid(md5('kodigo:preg:js2:' || c.clave)),
+  l.id,
+  c.enunciado,
+  c.tipo,
+  c.datos,
+  c.orden,
+  'publicado'
+from (values
+  -- Unidad 1 - Variables y tipos de datos
+  ('js2:l01:a1', 1,
+   E'¿Que imprime este programa?\nlet puntos = 4;\npuntos = puntos + 3;\nconsole.log(puntos);',
+   'predecir',
+   '{"codigo": "let puntos = 4;\npuntos = puntos + 3;\nconsole.log(puntos);", "modo": "texto", "instrucciones": "Segui el valor de la variable paso a paso."}'::jsonb,
+   101),
+  ('js2:l01:a2', 1,
+   '¿Que tipo de dato es true?',
+   'completar_texto',
+   '{"estricta": false, "instrucciones": "Escribi el nombre del tipo, sin comillas."}'::jsonb,
+   102),
+  ('js2:l01:a3', 1,
+   'Declara una constante llamada curso con el texto Kodigo y mostrala en consola.',
+   'escribir_codigo',
+   '{"instrucciones": "Usa const y comillas para el texto.", "pruebas": [{"entrada": "sin datos", "esperado": "Kodigo"}]}'::jsonb,
+   103),
+
+  -- Unidad 1 - Operadores y calculo
+  ('js2:l02:a1', 2,
+   E'¿Que imprime esta expresion?\nconsole.log(2 + 3 * 4);',
+   'salida_codigo',
+   '{"codigo": "console.log(2 + 3 * 4);", "modo": "texto", "instrucciones": "Recorda la prioridad de los operadores."}'::jsonb,
+   101),
+  ('js2:l02:a2', 2,
+   E'El area del rectangulo debe ser base por altura, pero el codigo suma.\nCorregi la operacion.',
+   'corregir_codigo',
+   '{"codigo_inicial": "const base = 10;\nconst altura = 4;\nconst area = base + altura;\nconsole.log(area);"}'::jsonb,
+   102),
+
+  -- Unidad 1 - Condicionales
+  ('js2:l03:a1', 3,
+   'Arma el condicional que muestra Mayor si edad es 18 o mas y Menor en caso contrario.',
+   'bloques',
+   '{"bloques": [{"id": "b1", "texto": "if (edad >= 18) {"}, {"id": "b2", "texto": "  console.log(\"Mayor\");"}, {"id": "b3", "texto": "} else {"}, {"id": "b4", "texto": "  console.log(\"Menor\");"}, {"id": "b5", "texto": "}"}, {"id": "b6", "texto": "while (edad >= 18) {"}, {"id": "b7", "texto": "  console.log(\"Igual\");"}], "instrucciones": "Sobra mas de un bloque."}'::jsonb,
+   101),
+  ('js2:l03:a2', 3,
+   E'¿Que imprime este operador ternario?\nconst edad = 15;\nconsole.log(edad >= 18 ? "Mayor" : "Menor");',
+   'predecir',
+   '{"codigo": "const edad = 15;\nconsole.log(edad >= 18 ? \"Mayor\" : \"Menor\");", "modo": "texto"}'::jsonb,
+   102),
+
+  -- Unidad 2 - Bucles for
+  ('js2:l04:a1', 4,
+   'Arma el bucle que muestra los numeros 0, 1 y 2.',
+   'bloques',
+   '{"bloques": [{"id": "b1", "texto": "for (let i = 0; i < 3; i++) {"}, {"id": "b2", "texto": "  console.log(i);"}, {"id": "b3", "texto": "}"}, {"id": "b4", "texto": "for (let i = 0; i < 3; i--) {"}, {"id": "b5", "texto": "  console.log(3);"}], "instrucciones": "Elegi el encabezado y el cuerpo correctos."}'::jsonb,
+   101),
+  ('js2:l04:a2', 4,
+   E'¿Que muestra este bucle?\nfor (let i = 1; i <= 3; i++) {\n  console.log(i * 2);\n}',
+   'salida_codigo',
+   '{"codigo": "for (let i = 1; i <= 3; i++) {\n  console.log(i * 2);\n}", "modo": "texto", "instrucciones": "Escribi los tres valores separados por espacio."}'::jsonb,
+   102),
+
+  -- Unidad 2 - Bucles while
+  ('js2:l05:a1', 5,
+   E'Suma los numeros del 1 al 5 con un while y muestra el total.',
+   'escribir_codigo',
+   '{"instrucciones": "Declara el contador y el acumulador antes del while.", "pruebas": [{"entrada": "1..5", "esperado": "15"}]}'::jsonb,
+   101),
+  ('js2:l05:a2', 5,
+   'Completa la condicion para que el while se ejecute mientras i sea menor que 3.',
+   'completar_codigo',
+   '{"codigo": "let i = 0;\nwhile (i {b1} 3) {\n  i++;\n}", "blancos": [{"clave": "b1"}], "candidatos": ["<", "<=", ">", "==="]}'::jsonb,
+   102),
+
+  -- Unidad 2 - Funciones
+  ('js2:l06:a1', 6,
+   'Escribi la funcion sumar(a, b) que devuelve la suma de sus dos parametros.',
+   'escribir_codigo',
+   '{"instrucciones": "No uses console.log dentro de la funcion: usa return.", "pruebas": [{"entrada": "sumar(2, 3)", "esperado": "5"}]}'::jsonb,
+   101),
+  ('js2:l06:a2', 6,
+   E'¿Que imprime?\nfunction doble(n) {\n  return n * 2;\n}\nconsole.log(doble(4) + 1);',
+   'predecir',
+   '{"codigo": "function doble(n) {\n  return n * 2;\n}\nconsole.log(doble(4) + 1);", "modo": "texto"}'::jsonb,
+   102),
+
+  -- Unidad 2 - Arrays
+  ('js2:l07:a1', 7,
+   'Completa el recorrido para mostrar cada fruta del array.',
+   'escribir_codigo',
+   '{"plantilla": "const frutas = [\"pera\", \"uva\"];", "instrucciones": "Usa un for con indice y el largo del array."}'::jsonb,
+   101),
+  ('js2:l07:a2', 7,
+   E'¿Que imprime?\nconst nums = [3, 5, 7];\nconsole.log(nums[1] + nums.length);',
+   'salida_codigo',
+   '{"codigo": "const nums = [3, 5, 7];\nconsole.log(nums[1] + nums.length);", "modo": "texto", "instrucciones": "El primer indice es 0."}'::jsonb,
+   102),
+
+  -- Unidad 3 - Objetos
+  ('js2:l08:a1', 8,
+   'Completa la notacion para leer la propiedad nota del objeto alumno.',
+   'completar_codigo',
+   '{"codigo": "const alumno = { nombre: \"Ana\", nota: 9 };\nconsole.log(alumno.{b1});", "blancos": [{"clave": "b1"}], "candidatos": ["nota", "nombre", "length", "valor"]}'::jsonb,
+   101),
+  ('js2:l08:a2', 8,
+   E'¿Que imprime?\nconst perro = { nombre: "Fury" };\nperro.edad = 3;\nconsole.log(perro.edad);',
+   'predecir',
+   '{"codigo": "const perro = { nombre: \"Fury\" };\nperro.edad = 3;\nconsole.log(perro.edad);", "modo": "texto"}'::jsonb,
+   102),
+
+  -- Unidad 3 - Cadenas de texto
+  ('js2:l09:a1', 9,
+   E'¿Que imprime?\nconsole.log("kodigo".toUpperCase());',
+   'salida_codigo',
+   '{"codigo": "console.log(\"kodigo\".toUpperCase());", "modo": "texto", "estricta": true}'::jsonb,
+   101),
+  ('js2:l09:a2', 9,
+   'El mensaje conserva espacios de mas. Corregi el codigo para limpiarlos.',
+   'corregir_codigo',
+   '{"codigo_inicial": "const mensaje = \"  hola  \";\nconsole.log(mensaje);"}'::jsonb,
+   102),
+
+  -- Unidad 3 - Proyecto de cierre
+  ('js2:l10:a1', 10,
+   'Calcula el promedio de las notas usando reduce y mostralo en consola.',
+   'escribir_codigo',
+   '{"plantilla": "const notas = [10, 6, 8, 9, 5];", "instrucciones": "Suma con reduce y divide por notas.length.", "pruebas": [{"entrada": "notas", "esperado": "7.6"}]}'::jsonb,
+   101),
+  ('js2:l10:a2', 10,
+   'Arma la linea que suma todas las notas con reduce.',
+   'bloques',
+   '{"bloques": [{"id": "b1", "texto": "const total = notas.reduce((suma, n) => suma + n, 0);"}, {"id": "b2", "texto": "const total = notas.reduce((suma, n) => suma * n, 0);"}, {"id": "b3", "texto": "const total = notas.map((suma, n) => suma + n, 0);"}, {"id": "b4", "texto": "const promedio = total / notas.length;"}], "instrucciones": "Solo una linea calcula la suma; la ultima calcula el promedio."}'::jsonb,
+   102)
+) as c(clave, leccion, enunciado, tipo, datos, orden)
+join lecciones_num l on l.n = c.leccion
+on conflict (id) do nothing;
+
+-- Soluciones de la practica ampliada. Todo lo que corrige vive aca y no en
+-- preguntas.datos, que es legible por los estudiantes.
+insert into soluciones (pregunta_id, opcion_correcta_id, solucion, explicacion)
+select
+  uuid(md5('kodigo:preg:js2:' || c.clave)),
+  null,
+  c.solucion,
+  c.explicacion
+from (values
+  ('js2:l01:a1', '{"valor": "7"}'::jsonb,
+   'La variable arranca en 4 y se le suman 3: el resultado es 7.'),
+  ('js2:l01:a2', '{"valor": "boolean", "alternativas": ["booleano"]}'::jsonb,
+   'true y false son los dos unicos valores del tipo boolean.'),
+  ('js2:l01:a3', '{"soluciones": ["const curso = \"Kodigo\";\nconsole.log(curso);", "const curso = ''Kodigo'';\nconsole.log(curso);"], "estricto": false}'::jsonb,
+   'const declara una constante y las comillas convierten Kodigo en un string. console.log lo muestra.'),
+
+  ('js2:l02:a1', '{"valor": "14"}'::jsonb,
+   'La multiplicacion se resuelve antes que la suma: 3 * 4 = 12 y 2 + 12 = 14.'),
+  ('js2:l02:a2', '{"soluciones": ["const base = 10;\nconst altura = 4;\nconst area = base * altura;\nconsole.log(area);"], "estricto": false}'::jsonb,
+   'El area se calcula multiplicando base por altura, no sumandolas.'),
+
+  ('js2:l03:a1', '{"orden": ["b1", "b2", "b3", "b4", "b5"]}'::jsonb,
+   'if evalua la condicion, else cubre el caso contrario y las llaves cierran cada bloque.'),
+  ('js2:l03:a2', '{"valor": "Menor", "alternativas": ["menor"]}'::jsonb,
+   '15 no es mayor ni igual que 18, entonces el ternario devuelve Menor.'),
+
+  ('js2:l04:a1', '{"orden": ["b1", "b2", "b3"]}'::jsonb,
+   'El for arranca en 0, sigue mientras i sea menor que 3 y suma 1 en cada vuelta.'),
+  ('js2:l04:a2', '{"valor": "2 4 6", "alternativas": ["2,4,6", "2\n4\n6", "2 4 6\n"]}'::jsonb,
+   'El bucle multiplica por 2 cada valor de i: 2, 4 y 6.'),
+
+  ('js2:l05:a1', '{"soluciones": ["let i = 1;\nlet total = 0;\nwhile (i <= 5) {\n  total = total + i;\n  i++;\n}\nconsole.log(total);", "let total = 0;\nfor (let i = 1; i <= 5; i++) {\n  total += i;\n}\nconsole.log(total);"], "estricto": false}'::jsonb,
+   'Se acumula cada numero del 1 al 5 y se muestra el total: 15.'),
+  ('js2:l05:a2', '{"blancos": [{"clave": "b1", "valor": "<", "alternativas": ["<"], "estricta": true}]}'::jsonb,
+   'Mientras i sea menor que 3 el bucle sigue; cuando llega a 3 termina.'),
+
+  ('js2:l06:a1', '{"soluciones": ["function sumar(a, b) {\n  return a + b;\n}", "const sumar = (a, b) => a + b;"], "estricto": false}'::jsonb,
+   'Una funcion recibe parametros y devuelve un resultado con return.'),
+  ('js2:l06:a2', '{"valor": "9"}'::jsonb,
+   'doble(4) devuelve 8 y luego se le suma 1: el resultado es 9.'),
+
+  ('js2:l07:a1', '{"soluciones": ["const frutas = [\"pera\", \"uva\"];\nfor (let i = 0; i < frutas.length; i++) {\n  console.log(frutas[i]);\n}", "const frutas = [\"pera\", \"uva\"];\nfor (const fruta of frutas) {\n  console.log(fruta);\n}"], "estricto": false}'::jsonb,
+   'Se recorre el array y se muestra cada elemento usando su indice.'),
+  ('js2:l07:a2', '{"valor": "8"}'::jsonb,
+   'nums[1] vale 5 y el largo del array es 3: 5 + 3 = 8.'),
+
+  ('js2:l08:a1', '{"blancos": [{"clave": "b1", "valor": "nota", "alternativas": ["nota"], "estricta": true}]}'::jsonb,
+   'La notacion punto lee la propiedad nota del objeto alumno.'),
+  ('js2:l08:a2', '{"valor": "3"}'::jsonb,
+   'Se agrega la propiedad edad al objeto y despues se lee: 3.'),
+
+  ('js2:l09:a1', '{"valor": "KODIGO", "alternativas": ["KODIGO"]}'::jsonb,
+   'toUpperCase devuelve el texto en mayusculas.'),
+  ('js2:l09:a2', '{"soluciones": ["const mensaje = \"  hola  \";\nconsole.log(mensaje.trim());"], "estricto": false}'::jsonb,
+   'trim quita los espacios de los extremos sin tocar los del medio.'),
+
+  ('js2:l10:a1', '{"soluciones": ["const notas = [10, 6, 8, 9, 5];\nconst total = notas.reduce((suma, nota) => suma + nota, 0);\nconsole.log(total / notas.length);", "const notas = [10, 6, 8, 9, 5];\nlet total = 0;\nfor (const nota of notas) {\n  total += nota;\n}\nconsole.log(total / notas.length);"], "estricto": false}'::jsonb,
+   'reduce acumula la suma y dividir por el largo del array da el promedio.'),
+  ('js2:l10:a2', '{"orden": ["b1", "b4"]}'::jsonb,
+   'reduce con acumulador suma todas las notas; despues se divide por la cantidad.')
+) as c(clave, solucion, explicacion)
+where exists (
+  select 1 from preguntas p where p.id = uuid(md5('kodigo:preg:js2:' || c.clave))
+)
+on conflict (pregunta_id) do update
+set solucion = excluded.solucion,
+    explicacion = excluded.explicacion;
+
+-- ===========================================================================
+-- 18.1. Practica ampliada de JavaScript — variantes con opciones
+--
+-- Dos actividades para cubrir la variante de salida/prediccion con opciones
+-- en lugar de respuesta escrita. Mismo esquema de ids deterministicos.
+-- ===========================================================================
+
+with lecciones_num as (
+  select id, row_number() over (order by id) as n
+  from lecciones
+  where id between '30000000-0000-0000-0000-000000000001'::uuid
+               and '30000000-0000-0000-0000-000000000010'::uuid
+)
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion)
+select
+  uuid(md5('kodigo:preg:js2:' || c.clave)),
+  l.id,
+  c.enunciado,
+  c.tipo,
+  c.datos,
+  c.orden,
+  'publicado'
+from (values
+  ('js2:l03:a3', 3,
+   E'¿Qué valor tiene x al final del programa?\nlet x = 1;\nx = x + 2;\nx = x * 10;',
+   'predecir',
+   '{"codigo": "let x = 1;\nx = x + 2;\nx = x * 10;", "modo": "opciones", "instrucciones": "Seguí el valor de x paso a paso."}'::jsonb,
+   103),
+  ('js2:l09:a3', 9,
+   E'¿Qué muestra console.log?\nconst nombre = "  kodigo  ";\nconsole.log(nombre.trim().toUpperCase());',
+   'salida_codigo',
+   '{"codigo": "const nombre = \"  kodigo  \";\nconsole.log(nombre.trim().toUpperCase());", "modo": "opciones", "instrucciones": "trim quita espacios de los extremos; toUpperCase pasa todo a mayúsculas."}'::jsonb,
+   103)
+) as c(clave, leccion, enunciado, tipo, datos, orden)
+join lecciones_num l on l.n = c.leccion
+on conflict (id) do nothing;
+
+insert into opciones (id, pregunta_id, texto, orden)
+select
+  uuid(md5('kodigo:opt:js2:' || c.clave_preg || ':o' || c.opo)),
+  p.id,
+  c.texto,
+  c.opo
+from (values
+  ('js2:l03:a3', 1, '30'),
+  ('js2:l03:a3', 2, '33'),
+  ('js2:l03:a3', 3, '21'),
+  ('js2:l03:a3', 4, '12'),
+  ('js2:l09:a3', 1, 'KODIGO'),
+  ('js2:l09:a3', 2, '  kodigo  '),
+  ('js2:l09:a3', 3, 'kodigo'),
+  ('js2:l09:a3', 4, 'Kodigo')
+) as c(clave_preg, opo, texto)
+join preguntas p on p.id = uuid(md5('kodigo:preg:js2:' || c.clave_preg))
+on conflict (id) do nothing;
+
+insert into soluciones (id, pregunta_id, opcion_correcta_id, solucion, explicacion)
+select
+  uuid(md5('kodigo:sol:js2:' || s.clave_preg)),
+  p.id,
+  o.id,
+  '{}'::jsonb,
+  s.explicacion
+from (values
+  ('js2:l03:a3', '30',
+   'Primero x pasa de 1 a 3 (1 + 2) y después de 3 a 30 (3 * 10).'),
+  ('js2:l09:a3', 'KODIGO',
+   'trim quita los espacios de los extremos: "kodigo". toUpperCase devuelve el texto en mayúsculas: KODIGO.')
+) as s(clave_preg, correcta, explicacion)
+join preguntas p on p.id = uuid(md5('kodigo:preg:js2:' || s.clave_preg))
+join opciones o on o.texto = s.correcta and o.pregunta_id = p.id
+on conflict (pregunta_id) do nothing;
+
+-- ===========================================================================
+-- 19. Endurecimiento de privilegios sobre perfiles
+--
+-- La policy "usuario modifica su perfil" permite actualizar cualquier columna
+-- de la propia fila. Con los default privileges de Supabase, authenticated
+-- tiene UPDATE sobre toda la tabla, lo que dejaria escribir experiencia,
+-- nivel, racha_dias o created_at a gusto del cliente. Se revoca el UPDATE
+-- general y se concede solo sobre las columnas del perfil editorial. Las
+-- funciones security definer (finalizar_intento, evaluar_logros) siguen
+-- pudiendo escribir XP, nivel y racha porque corren como su propietario.
+-- ===========================================================================
+
+revoke update on public.perfiles from authenticated, anon;
+grant update (nombre_usuario, nombre_visible, avatar_url) on public.perfiles to authenticated;

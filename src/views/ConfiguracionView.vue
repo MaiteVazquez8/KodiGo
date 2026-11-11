@@ -35,7 +35,7 @@
 
         <section class="configuracion-grupo">
           <p class="configuracion-grupo-titulo">SOPORTE Y PRIVACIDAD</p>
-          <RouterLink to="/acceso/recuperar" class="configuracion-item">
+          <RouterLink to="/ayuda" class="configuracion-item">
             <q-icon name="help_outline" size="20px" />
             <span>Centro de Ayuda</span>
             <q-icon name="chevron_right" size="20px" class="configuracion-item-flecha" />

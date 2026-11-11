@@ -194,10 +194,11 @@ test('comprobar_respuesta corrige cada tipo sin exponer soluciones', () => {
   assert.match(SQL, /create or replace function normalizar_texto_respuesta/)
 })
 
-test('aprobar las actividades de la unidad desbloquea la unidad siguiente', () => {
+test('aprobar las actividades de la unidad desbloquea la unidad siguiente solo para el usuario', () => {
   const desbloqueo = cuerpo('desbloquear_siguiente_unidad')
   assert.match(desbloqueo, /security definer/)
-  assert.match(desbloqueo, /update unidades\s*\n\s*set estado_publicacion = 'publicado'/)
+  assert.match(desbloqueo, /insert into progreso_unidades/)
+  assert.ok(!/update unidades/.test(desbloqueo), 'no debe tocar el estado global de la unidad')
 
   const finalizar = cuerpo('finalizar_intento')
   assert.match(finalizar, /perform desbloquear_siguiente_unidad\(v_usuario, v_leccion\)/)

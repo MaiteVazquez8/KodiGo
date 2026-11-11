@@ -345,6 +345,7 @@
             <div v-for="p in preguntasLeccion" :key="p.id" class="admin-itemo">
               <div class="admin-itemo-cab">
                 <strong class="admin-itemo-titulo">{{ p.enunciado }}</strong>
+                <span class="admin-tipo">{{ etiquetaTipoActividad(p.tipo) }}</span>
                 <button
                   type="button"
                   class="admin-pub"
@@ -354,7 +355,7 @@
                   {{ etiquetaEstadoAccion(p.estado_publicacion) }}
                 </button>
               </div>
-              <ul class="admin-opciones">
+              <ul v-if="p.opciones.length" class="admin-opciones">
                 <li v-for="o in p.opciones" :key="o.id">
                   {{ o.texto }}
                   <em
@@ -366,7 +367,11 @@
                 </li>
               </ul>
 
-              <form class="admin-form admin-form-solucion" @submit.prevent="definirSolucionActual(p)">
+              <form
+                v-if="usaOpciones(p.tipo, p.datos)"
+                class="admin-form admin-form-solucion"
+                @submit.prevent="definirSolucionActual(p)"
+              >
                 <select v-model="nuevaSolucion.opcionId" class="admin-select" aria-label="Opción correcta">
                   <option value="" disabled>Marcar la opción correcta</option>
                   <option v-for="o in p.opciones" :key="o.id" :value="o.id">{{ o.texto }}</option>
@@ -388,60 +393,239 @@
                   Editar la vigente
                 </button>
               </form>
+
+              <button type="button" class="admin-a-btn" @click="editarActividad(p)">
+                Editar actividad
+              </button>
             </div>
 
-            <details class="admin-detalle">
-              <summary class="admin-resumen">Crear nueva actividad de selección</summary>
-              <form class="admin-form" @submit.prevent="crearActividadCompleta">
+            <details class="admin-detalle" :open="Boolean(actividadForm.id)">
+              <summary class="admin-resumen">
+                {{ actividadForm.id ? 'Editar actividad' : 'Crear actividad' }}
+              </summary>
+              <form class="admin-form" @submit.prevent="guardarActividadForm">
+                <label class="admin-lbl" for="admin-tipo-actividad">Tipo de actividad</label>
+                <select id="admin-tipo-actividad" v-model="actividadForm.tipo" class="admin-select">
+                  <option v-for="t in TIPOS_ACTIVIDAD" :key="t.valor" :value="t.valor">
+                    {{ t.nombre }}
+                  </option>
+                </select>
+
                 <input
-                  v-model="nuevaActividad.enunciado"
+                  v-model="actividadForm.enunciado"
                   type="text"
                   class="admin-campo"
                   placeholder="Enunciado"
                   maxlength="400"
                 />
-                <input
-                  v-model="nuevaActividad.opcionA"
-                  type="text"
-                  class="admin-campo"
-                  placeholder="Opción A"
-                  maxlength="200"
+                <textarea
+                  v-model="actividadForm.instrucciones"
+                  class="admin-campo admin-area"
+                  rows="2"
+                  placeholder="Instrucciones para resolverla (opcional)"
+                  maxlength="600"
                 />
                 <input
-                  v-model="nuevaActividad.opcionB"
+                  v-model="actividadForm.explicacion"
                   type="text"
                   class="admin-campo"
-                  placeholder="Opción B"
-                  maxlength="200"
-                />
-                <input
-                  v-model="nuevaActividad.opcionC"
-                  type="text"
-                  class="admin-campo"
-                  placeholder="Opción C (opcional)"
-                  maxlength="200"
-                />
-                <input
-                  v-model="nuevaActividad.opcionD"
-                  type="text"
-                  class="admin-campo"
-                  placeholder="Opción D (opcional)"
-                  maxlength="200"
-                />
-                <select v-model.number="nuevaActividad.indice" class="admin-select">
-                  <option :value="0">La correcta es A</option>
-                  <option :value="1">La correcta es B</option>
-                  <option :value="2">La correcta es C</option>
-                  <option :value="3">La correcta es D</option>
-                </select>
-                <input
-                  v-model="nuevaActividad.explicacion"
-                  type="text"
-                  class="admin-campo"
-                  placeholder="Explicación de la solución"
+                  placeholder="Explicación de la solución (obligatoria)"
                   maxlength="400"
                 />
-                <button type="submit" class="admin-a-btn">Crear actividad</button>
+
+                <!-- Opciones: seleccion, verdadero_falso y salida/predecir con opciones -->
+                <template v-if="tipoConOpciones">
+                  <label class="admin-lbl">Opciones (una por línea)</label>
+                  <textarea
+                    v-model="actividadForm.opciones"
+                    class="admin-campo admin-area k-mono"
+                    rows="4"
+                    placeholder="Opción A&#10;Opción B&#10;Opción C"
+                  />
+                  <label class="admin-lbl">Opción correcta</label>
+                  <select v-model.number="actividadForm.indiceCorrecta" class="admin-select">
+                    <option
+                      v-for="(texto, indice) in lineas(actividadForm.opciones)"
+                      :key="indice"
+                      :value="indice"
+                    >
+                      {{ indice + 1 }}. {{ texto }}
+                    </option>
+                  </select>
+                </template>
+
+                <!-- Completar texto -->
+                <template v-if="actividadForm.tipo === 'completar_texto'">
+                  <label class="admin-lbl">Respuesta correcta</label>
+                  <input
+                    v-model="actividadForm.valor"
+                    type="text"
+                    class="admin-campo"
+                    placeholder="Valor esperado"
+                  />
+                  <label class="admin-lbl">Alternativas aceptadas (separadas por coma)</label>
+                  <input
+                    v-model="actividadForm.alternativas"
+                    type="text"
+                    class="admin-campo"
+                    placeholder="Ej: typeof, type of"
+                  />
+                  <label class="admin-check">
+                    <input v-model="actividadForm.estricta" type="checkbox" />
+                    Distinguir mayúsculas y minúsculas
+                  </label>
+                </template>
+
+                <!-- Completar código -->
+                <template v-if="actividadForm.tipo === 'completar_codigo'">
+                  <label class="admin-lbl">Código base (usá {clave} para cada blanco)</label>
+                  <textarea
+                    v-model="actividadForm.codigo"
+                    class="admin-campo admin-area k-mono"
+                    rows="5"
+                    placeholder="const total = {total};"
+                  />
+                  <label class="admin-lbl">Blancos: clave = valor | alternativa1, alternativa2</label>
+                  <textarea
+                    v-model="actividadForm.blancos"
+                    class="admin-campo admin-area k-mono"
+                    rows="3"
+                    placeholder="total = 10 | diez"
+                  />
+                </template>
+
+                <!-- Ordenar -->
+                <template v-if="actividadForm.tipo === 'ordenar'">
+                  <label class="admin-lbl">Elementos en el orden correcto (uno por línea)</label>
+                  <textarea
+                    v-model="actividadForm.opciones"
+                    class="admin-campo admin-area k-mono"
+                    rows="4"
+                  />
+                </template>
+
+                <!-- Relacionar -->
+                <template v-if="actividadForm.tipo === 'relacionar'">
+                  <label class="admin-lbl">Pares: izquierda | derecha (uno por línea)</label>
+                  <textarea
+                    v-model="actividadForm.pares"
+                    class="admin-campo admin-area k-mono"
+                    rows="4"
+                    placeholder="let | declara una variable reasignable"
+                  />
+                </template>
+
+                <!-- Escribir / corregir código -->
+                <template
+                  v-if="actividadForm.tipo === 'escribir_codigo' || actividadForm.tipo === 'corregir_codigo'"
+                >
+                  <label v-if="actividadForm.tipo === 'corregir_codigo'" class="admin-lbl">
+                    Código con errores (punto de partida)
+                  </label>
+                  <textarea
+                    v-if="actividadForm.tipo === 'corregir_codigo'"
+                    v-model="actividadForm.codigoInicial"
+                    class="admin-campo admin-area k-mono"
+                    rows="5"
+                  />
+                  <label class="admin-lbl">Soluciones aceptadas (una por línea, opcional)</label>
+                  <textarea
+                    v-model="actividadForm.soluciones"
+                    class="admin-campo admin-area k-mono"
+                    rows="3"
+                  />
+                  <label class="admin-lbl">Patrones requeridos (regex, uno por línea)</label>
+                  <textarea
+                    v-model="actividadForm.requeridos"
+                    class="admin-campo admin-area k-mono"
+                    rows="2"
+                    placeholder="function\\s+sumar"
+                  />
+                  <label class="admin-lbl">Patrones prohibidos (regex, uno por línea)</label>
+                  <textarea
+                    v-model="actividadForm.prohibidos"
+                    class="admin-campo admin-area k-mono"
+                    rows="2"
+                  />
+                  <label class="admin-lbl">Casos de ejemplo: entrada => esperado (uno por línea)</label>
+                  <textarea
+                    v-model="actividadForm.pruebas"
+                    class="admin-campo admin-area k-mono"
+                    rows="2"
+                  />
+                  <label class="admin-check">
+                    <input v-model="actividadForm.estricta" type="checkbox" />
+                    Comparar el código distinguiendo mayúsculas
+                  </label>
+                </template>
+
+                <!-- Salida de código / predecir -->
+                <template
+                  v-if="actividadForm.tipo === 'salida_codigo' || actividadForm.tipo === 'predecir'"
+                >
+                  <label class="admin-lbl">Código a analizar</label>
+                  <textarea
+                    v-model="actividadForm.codigo"
+                    class="admin-campo admin-area k-mono"
+                    rows="4"
+                  />
+                  <label class="admin-lbl">Modo de respuesta</label>
+                  <select v-model="actividadForm.modo" class="admin-select">
+                    <option value="texto">Respuesta escrita</option>
+                    <option value="opciones">Opciones</option>
+                  </select>
+                  <template v-if="actividadForm.modo === 'texto'">
+                    <input
+                      v-model="actividadForm.valor"
+                      type="text"
+                      class="admin-campo"
+                      placeholder="Salida esperada"
+                    />
+                    <input
+                      v-model="actividadForm.alternativas"
+                      type="text"
+                      class="admin-campo"
+                      placeholder="Alternativas aceptadas (separadas por coma)"
+                    />
+                  </template>
+                </template>
+
+                <!-- Bloques -->
+                <template v-if="actividadForm.tipo === 'bloques'">
+                  <label class="admin-lbl">Bloques disponibles (uno por línea, incluí distractores)</label>
+                  <textarea
+                    v-model="actividadForm.bloques"
+                    class="admin-campo admin-area k-mono"
+                    rows="5"
+                  />
+                  <label class="admin-lbl">Orden correcto por número de bloque (ej: 1, 3, 2)</label>
+                  <input
+                    v-model="actividadForm.orden"
+                    type="text"
+                    class="admin-campo k-mono"
+                    placeholder="1, 3, 2"
+                  />
+                </template>
+
+                <label class="admin-lbl" for="admin-estado-actividad">Estado</label>
+                <select id="admin-estado-actividad" v-model="actividadForm.estado" class="admin-select">
+                  <option value="borrador">Guardar como borrador</option>
+                  <option value="publicado">Publicar (valida antes)</option>
+                </select>
+
+                <div class="admin-form-acciones">
+                  <button type="submit" class="admin-a-btn" :disabled="enviando">
+                    {{ actividadForm.id ? 'Guardar cambios' : 'Crear actividad' }}
+                  </button>
+                  <button
+                    v-if="actividadForm.id"
+                    type="button"
+                    class="admin-a-btn admin-prefill"
+                    @click="resetActividadForm"
+                  >
+                    Cancelar edición
+                  </button>
+                </div>
               </form>
             </details>
           </template>
@@ -528,7 +712,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
@@ -537,10 +721,10 @@ import {
   cambiarEstadoEvento,
   configurarDesafio,
   crearEvento as crearEventoServicio,
-  crearPreguntaCompleta,
   definirSolucion,
   esAdmin,
   estadisticasEvento,
+  guardarActividad,
   listarBancoPreguntas,
   listarCursos,
   listarDesafios,
@@ -599,14 +783,54 @@ const leccionActiva = ref(null)
 const preguntasLeccion = ref([])
 const solucionesPorPregunta = reactive({})
 const nuevaSolucion = reactive({ opcionId: '', explicacion: '' })
-const nuevaActividad = reactive({
+
+const TIPOS_ACTIVIDAD = [
+  { valor: 'seleccion', nombre: 'Selección múltiple' },
+  { valor: 'verdadero_falso', nombre: 'Verdadero o falso' },
+  { valor: 'completar_texto', nombre: 'Completar texto' },
+  { valor: 'completar_codigo', nombre: 'Completar código' },
+  { valor: 'ordenar', nombre: 'Ordenar pasos' },
+  { valor: 'relacionar', nombre: 'Relacionar columnas' },
+  { valor: 'escribir_codigo', nombre: 'Escribir código' },
+  { valor: 'corregir_codigo', nombre: 'Corregir código' },
+  { valor: 'salida_codigo', nombre: 'Salida de código' },
+  { valor: 'predecir', nombre: 'Predecir resultado' },
+  { valor: 'bloques', nombre: 'Armar con bloques' },
+]
+
+const formularioVacio = () => ({
+  id: null,
+  tipo: 'seleccion',
   enunciado: '',
-  opcionA: '',
-  opcionB: '',
-  opcionC: '',
-  opcionD: '',
-  indice: 0,
+  instrucciones: '',
   explicacion: '',
+  opciones: '',
+  indiceCorrecta: 0,
+  valor: '',
+  alternativas: '',
+  estricta: false,
+  codigo: '',
+  blancos: '',
+  codigoInicial: '',
+  soluciones: '',
+  requeridos: '',
+  prohibidos: '',
+  pruebas: '',
+  modo: 'texto',
+  pares: '',
+  bloques: '',
+  orden: '',
+  estado: 'borrador',
+})
+
+const actividadForm = reactive(formularioVacio())
+
+const tipoConOpciones = computed(() => {
+  if (actividadForm.tipo === 'seleccion' || actividadForm.tipo === 'verdadero_falso') return true
+  return (
+    (actividadForm.tipo === 'salida_codigo' || actividadForm.tipo === 'predecir') &&
+    actividadForm.modo === 'opciones'
+  )
 })
 
 // Resultados
@@ -884,7 +1108,7 @@ async function elegirLeccion(leccion) {
   Object.keys(solucionesPorPregunta).forEach((k) => delete solucionesPorPregunta[k])
   nuevaSolucion.opcionId = ''
   nuevaSolucion.explicacion = ''
-  resetActividad()
+  resetActividadForm()
   await recargarLeccionActiva()
 }
 
@@ -939,71 +1163,287 @@ async function definirSolucionActual(pregunta) {
   }
 }
 
-function resetActividad() {
-  nuevaActividad.enunciado = ''
-  nuevaActividad.opcionA = ''
-  nuevaActividad.opcionB = ''
-  nuevaActividad.opcionC = ''
-  nuevaActividad.opcionD = ''
-  nuevaActividad.indice = 0
-  nuevaActividad.explicacion = ''
+function etiquetaTipoActividad(tipo) {
+  return TIPOS_ACTIVIDAD.find((t) => t.valor === tipo)?.nombre ?? tipo ?? 'Actividad'
 }
 
-async function crearActividadCompleta() {
-  const enunciado = nuevaActividad.enunciado.trim()
-  const explicacion = nuevaActividad.explicacion.trim()
+function usaOpciones(tipo, datos) {
+  if (tipo === 'seleccion' || tipo === 'verdadero_falso') return true
+  if (tipo === 'salida_codigo' || tipo === 'predecir') {
+    return (datos?.modo ?? 'texto') === 'opciones'
+  }
+  return false
+}
+
+function lineas(texto) {
+  return String(texto ?? '')
+    .split(/\r?\n/)
+    .map((linea) => linea.trim())
+    .filter(Boolean)
+}
+
+function resetActividadForm() {
+  Object.assign(actividadForm, formularioVacio())
+}
+
+function editarActividad(pregunta) {
+  const solucion = solucionDe(pregunta.id)?.solucion ?? {}
+  const datos = pregunta.datos ?? {}
+  const opciones = (pregunta.opciones ?? []).map((o) => o.texto)
+
+  resetActividadForm()
+  actividadForm.id = pregunta.id
+  actividadForm.tipo = pregunta.tipo ?? 'seleccion'
+  actividadForm.enunciado = pregunta.enunciado ?? ''
+  actividadForm.instrucciones = datos.instrucciones ?? ''
+  actividadForm.explicacion = solucionDe(pregunta.id)?.explicacion ?? ''
+  actividadForm.opciones = opciones.join('\n')
+  actividadForm.indiceCorrecta = Math.max(
+    0,
+    (pregunta.opciones ?? []).findIndex((o) => o.id === solucionDe(pregunta.id)?.opcionCorrectaId),
+  )
+  actividadForm.valor = solucion.valor ?? datos.valor ?? ''
+  actividadForm.alternativas = (solucion.alternativas ?? datos.alternativas ?? []).join(', ')
+  actividadForm.estricta = Boolean(solucion.estricta ?? datos.estricta)
+  actividadForm.codigo = datos.codigo ?? ''
+  actividadForm.codigoInicial = datos.codigo_inicial ?? ''
+  actividadForm.modo = datos.modo ?? 'texto'
+  actividadForm.estado = pregunta.estado_publicacion ?? 'borrador'
+  actividadForm.soluciones = (solucion.soluciones ?? []).join('\n')
+  actividadForm.requeridos = (solucion.requeridos ?? []).join('\n')
+  actividadForm.prohibidos = (solucion.prohibidos ?? []).join('\n')
+  actividadForm.pruebas = (datos.pruebas ?? [])
+    .map((prueba) => `${prueba.entrada ?? ''} => ${prueba.esperado ?? ''}`)
+    .join('\n')
+
+  const blancos = solucion.blancos ?? datos.blancos ?? []
+  actividadForm.blancos = blancos
+    .map((blanco) => {
+      const alternativas = (blanco.alternativas ?? []).join(', ')
+      return `${blanco.clave} = ${blanco.valor ?? ''}${alternativas ? ` | ${alternativas}` : ''}`
+    })
+    .join('\n')
+
+  const textoA = Object.fromEntries((datos.columna_a ?? []).map((item) => [item.id, item.texto]))
+  const textoB = Object.fromEntries((datos.columna_b ?? []).map((item) => [item.id, item.texto]))
+  actividadForm.pares = (solucion.pares ?? [])
+    .map((par) => `${textoA[par.id_a] ?? par.id_a} | ${textoB[par.id_b] ?? par.id_b}`)
+    .join('\n')
+
+  const bloques = datos.bloques ?? []
+  actividadForm.bloques = bloques.map((bloque) => bloque.texto).join('\n')
+  actividadForm.orden = (solucion.orden ?? [])
+    .map((id) => {
+      const indice = bloques.findIndex((bloque) => bloque.id === id)
+      return indice === -1 ? '' : String(indice + 1)
+    })
+    .filter(Boolean)
+    .join(', ')
+}
+
+function armarActividad() {
+  const tipo = actividadForm.tipo
+  const datos = {}
+  const solucion = {}
+
+  if (actividadForm.instrucciones.trim()) {
+    datos.instrucciones = actividadForm.instrucciones.trim()
+  }
+
+  const opciones = lineas(actividadForm.opciones)
+  let indiceCorrecta = 0
+
+  if (tipoConOpciones.value) {
+    if (opciones.length < 2) {
+      throw new Error('La actividad necesita al menos dos opciones.')
+    }
+    indiceCorrecta = Number(actividadForm.indiceCorrecta)
+    if (indiceCorrecta < 0 || indiceCorrecta >= opciones.length) {
+      throw new Error('Elegí una opción correcta válida.')
+    }
+  }
+
+  if (tipo === 'ordenar') {
+    if (opciones.length < 2) throw new Error('Necesitás al menos dos elementos para ordenar.')
+  }
+
+  if (tipo === 'completar_texto') {
+    solucion.valor = actividadForm.valor.trim()
+    const alternativas = actividadForm.alternativas
+      .split(',')
+      .map((a) => a.trim())
+      .filter(Boolean)
+    if (alternativas.length) solucion.alternativas = alternativas
+    solucion.estricta = Boolean(actividadForm.estricta)
+    if (actividadForm.estricta) datos.estricta = true
+    if (!solucion.valor && !alternativas.length) {
+      throw new Error('Indicá la respuesta correcta o alguna alternativa.')
+    }
+  }
+
+  if (tipo === 'completar_codigo') {
+    datos.codigo = actividadForm.codigo
+    const blancos = lineas(actividadForm.blancos).map((linea) => {
+      const igual = linea.indexOf('=')
+      const izquierda = igual === -1 ? linea : linea.slice(0, igual)
+      const derecha = igual === -1 ? '' : linea.slice(igual + 1)
+      const [valor, alternativas] = String(derecha ?? '').split('|')
+      const blanco = {
+        clave: String(izquierda ?? '').trim(),
+        valor: String(valor ?? '').trim(),
+      }
+      const alts = String(alternativas ?? '')
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean)
+      if (alts.length) blanco.alternativas = alts
+      return blanco
+    })
+    if (!datos.codigo.trim()) throw new Error('Falta el código base.')
+    if (!blancos.length || blancos.some((b) => !b.clave || !b.valor)) {
+      throw new Error('Cada blanco necesita clave y valor.')
+    }
+    // Presentacion sin respuestas: las claves viven en datos y los valores en
+    // soluciones, que tiene RLS sin lectura para estudiantes.
+    datos.blancos = blancos.map((blanco) => ({ clave: blanco.clave }))
+    solucion.blancos = blancos
+  }
+
+  if (tipo === 'relacionar') {
+    const filas = lineas(actividadForm.pares).map((linea) => linea.split('|'))
+    if (!filas.length) throw new Error('Agregá al menos un par.')
+    const columnaA = []
+    const columnaB = []
+    const pares = []
+    for (const fila of filas) {
+      const textoA = String(fila[0] ?? '').trim()
+      const textoB = String(fila[1] ?? '').trim()
+      if (!textoA || !textoB) throw new Error('Cada par necesita izquierda y derecha.')
+      let itemA = columnaA.find((item) => item.texto === textoA)
+      if (!itemA) {
+        itemA = { id: `a${columnaA.length + 1}`, texto: textoA }
+        columnaA.push(itemA)
+      }
+      let itemB = columnaB.find((item) => item.texto === textoB)
+      if (!itemB) {
+        itemB = { id: `b${columnaB.length + 1}`, texto: textoB }
+        columnaB.push(itemB)
+      }
+      pares.push({ id_a: itemA.id, id_b: itemB.id })
+    }
+    datos.columna_a = columnaA
+    datos.columna_b = columnaB
+    solucion.pares = pares
+  }
+
+  if (tipo === 'escribir_codigo' || tipo === 'corregir_codigo') {
+    if (tipo === 'corregir_codigo') {
+      datos.codigo_inicial = actividadForm.codigoInicial
+      if (!String(actividadForm.codigoInicial ?? '').trim()) {
+        throw new Error('Indicá el código con errores que el estudiante va a corregir.')
+      }
+    }
+    const soluciones = lineas(actividadForm.soluciones)
+    const requeridos = lineas(actividadForm.requeridos)
+    const prohibidos = lineas(actividadForm.prohibidos)
+    if (!soluciones.length && !requeridos.length) {
+      throw new Error('Indicá soluciones aceptadas o al menos un patrón requerido.')
+    }
+    if (soluciones.length) solucion.soluciones = soluciones
+    if (requeridos.length) solucion.requeridos = requeridos
+    if (prohibidos.length) solucion.prohibidos = prohibidos
+    solucion.estricto = Boolean(actividadForm.estricta)
+    const pruebas = lineas(actividadForm.pruebas).map((linea) => {
+      const [entrada, esperado] = linea.split('=>')
+      return { entrada: String(entrada ?? '').trim(), esperado: String(esperado ?? '').trim() }
+    })
+    if (pruebas.length) datos.pruebas = pruebas
+  }
+
+  if (tipo === 'salida_codigo' || tipo === 'predecir') {
+    datos.codigo = actividadForm.codigo
+    datos.modo = actividadForm.modo
+    if (!datos.codigo.trim()) throw new Error('Falta el código a analizar.')
+    if (actividadForm.modo === 'texto') {
+      solucion.valor = actividadForm.valor.trim()
+      const alternativas = actividadForm.alternativas
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean)
+      if (alternativas.length) solucion.alternativas = alternativas
+      solucion.estricta = Boolean(actividadForm.estricta)
+      if (!solucion.valor && !alternativas.length) {
+        throw new Error('Indicá la salida esperada o alguna alternativa.')
+      }
+    }
+  }
+
+  if (tipo === 'bloques') {
+    const textos = lineas(actividadForm.bloques)
+    if (textos.length < 2) throw new Error('Necesitás al menos dos bloques disponibles.')
+    const bloques = textos.map((texto, indice) => ({ id: `b${indice + 1}`, texto }))
+    const orden = actividadForm.orden
+      .split(',')
+      .map((n) => Number.parseInt(n.trim(), 10))
+      .filter((n) => Number.isInteger(n))
+    if (!orden.length) throw new Error('Indicá el orden correcto de los bloques.')
+    solucion.orden = orden.map((numero) => {
+      const bloque = bloques[numero - 1]
+      if (!bloque) throw new Error(`El bloque ${numero} no existe en la lista.`)
+      return bloque.id
+    })
+    datos.bloques = bloques
+  }
+
+  return { datos, solucion, opciones, indiceCorrecta }
+}
+
+async function guardarActividadForm() {
   if (!leccionActiva.value) {
     mensaje('Primero elegí la clase de destino.', true)
     return
   }
+  const enunciado = actividadForm.enunciado.trim()
+  const explicacion = actividadForm.explicacion.trim()
   if (!enunciado) {
     mensaje('La actividad necesita enunciado.', true)
     return
   }
   if (!explicacion) {
-    mensaje('La actividad necesita su explicación.', true)
+    mensaje('La explicación es obligatoria: es lo que ve el estudiante al final.', true)
     return
   }
 
-  // Las opciones vacias se descartan y el indice de la correcta se recalcula
-  // segun la posicion real despues del descarte.
-  const entradas = [
-    { texto: nuevaActividad.opcionA, marcada: nuevaActividad.indice === 0 },
-    { texto: nuevaActividad.opcionB, marcada: nuevaActividad.indice === 1 },
-    { texto: nuevaActividad.opcionC, marcada: nuevaActividad.indice === 2 },
-    { texto: nuevaActividad.opcionD, marcada: nuevaActividad.indice === 3 },
-  ]
-  const opciones = []
-  let indiceCorrecta = -1
-  for (const e of entradas) {
-    const t = e.texto.trim()
-    if (!t) continue
-    if (e.marcada) indiceCorrecta = opciones.length
-    opciones.push(t)
-  }
-
-  if (opciones.length < 2) {
-    mensaje('La actividad necesita al menos dos opciones con texto.', true)
-    return
-  }
-  if (indiceCorrecta < 0) {
-    mensaje('La opción correcta quedó vacía: revisá la selección.', true)
+  let armado
+  try {
+    armado = armarActividad()
+  } catch (error) {
+    mensaje(error.message, true)
     return
   }
 
   enviando.value = true
+  const estadoElegido = actividadForm.estado
   try {
-    await crearPreguntaCompleta({
-      leccionId: leccionActiva.value.id,
+    await guardarActividad({
+      id: actividadForm.id,
+      leccion_id: leccionActiva.value.id,
+      tipo: actividadForm.tipo,
       enunciado,
-      opciones,
-      indiceCorrecta,
       explicacion,
+      datos: armado.datos,
+      solucion: armado.solucion,
+      opciones: tipoConOpciones.value ? armado.opciones : null,
+      indice_correcta: tipoConOpciones.value ? armado.indiceCorrecta : null,
+      estado_publicacion: estadoElegido,
     })
-    resetActividad()
-    banco.value = await listarBancoPreguntas()
     await recargarLeccionActiva()
-    mensaje('Actividad creada en borrador: definí su solución y publícala cuando esté lista.')
+    resetActividadForm()
+    mensaje(
+      estadoElegido === 'publicado'
+        ? 'Actividad publicada: el servidor validó la estructura y la solución.'
+        : 'Actividad guardada en borrador. Podés publicarla cuando esté completa.',
+    )
   } catch (error) {
     mensaje(error.message, true)
   } finally {
@@ -1091,10 +1531,6 @@ function cambiarTab(clave) {
 function volverInicio() {
   router.push('/learn')
 }
-
-onBeforeUnmount(() => {
-  // Nada fino: los mensajes programados mueren con el componente.
-})
 </script>
 
 <style scoped>
@@ -1478,6 +1914,39 @@ onBeforeUnmount(() => {
 }
 
 /* Actividades ------------------------------------------------------ */
+.admin-tipo {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 5, 194, 0.45);
+  background: rgba(142, 5, 194, 0.14);
+  color: var(--k-accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.admin-area {
+  min-height: 62px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.admin-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--k-text-2);
+}
+
+.admin-form-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--k-space-3);
+}
+
 .admin-opciones {
   list-style: none;
   margin: 0;

@@ -14,15 +14,14 @@ const resultados = leer('src', 'views', 'ResultadosView.vue')
 const actividad = leer('src', 'views', 'ActividadView.vue')
 const auth = leer('src', 'services', 'auth.js')
 
-test('una leccion bloqueada no se puede intentar desde el servidor', () => {
+test('una leccion no publicada no se puede intentar desde el servidor', () => {
   const fn = buscarSentencias(SQL, 'create (or replace )?function es_leccion_publicada')
   assert.equal(fn.length, 1)
-  assert.match(fn[0], /estado_publicacion = 'publicado'/)
-  // 'bloqueada' puede quedar visible para listar, pero no se puede practicar.
-  assert.ok(
-    !/estado_publicacion in \('publicado', 'bloqueada'\)/.test(fn[0]),
-    'no debe aceptar lecciones bloqueadas',
-  )
+  assert.match(fn[0], /l\.estado_publicacion = 'publicado'/)
+  // Una unidad bloqueada globalmente solo se acepta si ESTE usuario la
+  // desbloqueo: el avance nunca publica la unidad para todo el mundo.
+  assert.match(fn[0], /progreso_unidades/)
+  assert.match(fn[0], /pu\.usuario_id = auth\.uid\(\)/)
 })
 
 test('los perfiles no se leen enteros entre usuarios', () => {

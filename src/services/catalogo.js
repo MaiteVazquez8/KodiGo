@@ -14,6 +14,9 @@ const resumenPorLeccion = new Map()
 const cantidadPreguntasPorLeccion = new Map()
 const intentoActivoPorLeccion = new Map()
 const leccionDeIntento = new Map()
+// Unidades habilitadas para el usuario actual. Ya no se muta el estado global
+// de la unidad: el desbloqueo es por persona y vive en progreso_unidades.
+const unidadesDesbloqueadas = new Map()
 
 const PREFIJO_CLAVE_INTENTO = 'kodigo.intento.'
 
@@ -98,6 +101,7 @@ function mapearProgreso(fila) {
 export async function cargarProgreso() {
   progresoPorLeccion.clear()
   resumenPorLeccion.clear()
+  unidadesDesbloqueadas.clear()
 
   const { data: sesion } = await supabase.auth.getSession()
   if (!sesion?.session) return progresoPorLeccion
@@ -108,6 +112,15 @@ export async function cargarProgreso() {
   const filas = data ?? []
   for (const fila of filas) {
     progresoPorLeccion.set(fila.leccion_id, mapearProgreso(fila))
+  }
+
+  try {
+    const { data: habilitadas } = await supabase.rpc('obtener_unidades_desbloqueadas')
+    for (const fila of habilitadas ?? []) {
+      unidadesDesbloqueadas.set(fila.unidad_id, Boolean(fila.completada))
+    }
+  } catch {
+    // Si la RPC todavia no esta migrada se cae al estado global de la unidad.
   }
 
   // El resumen de la ultima intento aporta los conteos exactos de
@@ -121,7 +134,7 @@ export async function cargarProgreso() {
       )
       .in('id', idsIntentos)
 
-    if (errorUltimos) throw crearError('No se pudieron cargar los Ãºltimos intentos.', errorUltimos)
+    if (errorUltimos) throw crearError('No se pudieron cargar los últimos intentos.', errorUltimos)
     for (const fila of ultimos ?? []) {
       resumenPorLeccion.set(fila.leccion_id, mapearResumen(fila))
     }
@@ -135,12 +148,26 @@ export function obtenerIntentoLeccion(leccionId) {
 }
 
 /**
+ * Una unidad esta disponible si esta publicada para todo el mundo o si este
+ * usuario ya la desbloqueo. El estado editorial global nunca se modifica.
+ */
+export function unidadHabilitada(unidad) {
+  if (!unidad) return false
+  if (unidad.estado_publicacion === 'publicado') return true
+  return unidadesDesbloqueadas.has(unidad.id)
+}
+
+export function obtenerUnidadesDesbloqueadas() {
+  return new Set(unidadesDesbloqueadas.keys())
+}
+
+/**
  * Empieza (o recupera) el intento de una leccion. La clave de idempotencia
  * se guarda en el dispositivo, asi que recargar la pagina no crea un intento
  * nuevo ni duplica respuestas.
  */
 export async function iniciarIntento(leccionId) {
-  if (!leccionId) throw crearError('Falta la lecciÃ³n para iniciar el intento.')
+  if (!leccionId) throw crearError('Falta la lección para iniciar el intento.')
 
   const { data, error } = await supabase.rpc('iniciar_intento', {
     p_leccion_id: leccionId,
@@ -279,12 +306,12 @@ export async function obtenerHistorialLeccion(leccionId) {
   const { data, error } = await supabase
     .from('intentos')
     .select(
-      'id, estado, porcentaje, respuestas_correctas, respuestas_incorrectas, cantidad_preguntas, completado, aprobado, iniciado_at, finalizado_at',
+      'id, estado, porcentaje, respuestas_correctas, respuestas_incorrectas, cantidad_preguntas, completado, aprobado, xp_ganado, iniciado_at, finalizado_at',
     )
     .eq('leccion_id', leccionId)
     .order('iniciado_at', { ascending: false })
 
-  if (error) throw crearError('No se pudo cargar el historial de la lecciÃ³n.', error)
+  if (error) throw crearError('No se pudo cargar el historial de la lección.', error)
   return (data ?? []).map((fila) => ({
     id: fila.id,
     estado: fila.estado,
@@ -294,6 +321,7 @@ export async function obtenerHistorialLeccion(leccionId) {
     total: fila.cantidad_preguntas,
     completado: Boolean(fila.completado),
     aprobada: Boolean(fila.aprobado),
+    xpGanado: Number(fila.xp_ganado ?? 0),
     iniciadoEn: fila.iniciado_at,
     finalizadoEn: fila.finalizado_at,
   }))
@@ -365,6 +393,24 @@ function mapearLeccion(fila, cantidadPreguntas = 0, estado = 'disponible') {
   }
 }
 
+// Los datos de presentacion viajan al cliente, pero las respuestas viven en
+// soluciones (protegida por RLS). Este saneo evita que una actividad vieja
+// filtre el valor correcto dentro de datos.
+export function sanearDatosPregunta(datos) {
+  if (!datos || typeof datos !== 'object') return datos
+  const copia = { ...datos }
+  delete copia.valor
+  delete copia.alternativas
+  delete copia.soluciones
+  delete copia.requeridos
+  delete copia.prohibidos
+  delete copia.salida_esperada
+  if (Array.isArray(copia.blancos)) {
+    copia.blancos = copia.blancos.map((blanco) => ({ clave: blanco.clave }))
+  }
+  return copia
+}
+
 function mapearPregunta(fila, opciones) {
   return {
     id: fila.id,
@@ -373,7 +419,7 @@ function mapearPregunta(fila, opciones) {
     orden: fila.orden,
     opciones,
     tipo: fila.tipo || 'seleccion',
-    datos: fila.datos || null,
+    datos: sanearDatosPregunta(fila.datos || null),
   }
 }
 
@@ -446,7 +492,7 @@ export async function obtenerUnidades(cursoId) {
     const progreso = calcularProgresoUnidad(idsPublicadas)
 
     let estado = 'disponible'
-    if (unidad.estado_publicacion !== 'publicado') estado = 'bloqueada'
+    if (!unidadHabilitada(unidad)) estado = 'bloqueada'
     else if (progreso >= 100) estado = 'completada'
 
     return mapearUnidad(unidad, cantidadLecciones, progreso, estado)
@@ -465,7 +511,7 @@ export async function obtenerUnidad(cursoId, unidadId) {
 
   if (!data) return null
 
-  const estado = data.estado_publicacion === 'publicado' ? 'disponible' : 'bloqueada'
+  const estado = unidadHabilitada(data) ? 'disponible' : 'bloqueada'
   return mapearUnidad(data, 0, 0, estado)
 }
 
@@ -480,7 +526,7 @@ export async function obtenerUnidadPorId(unidadId) {
 
   if (!data) return null
 
-  const estado = data.estado_publicacion === 'publicado' ? 'disponible' : 'bloqueada'
+  const estado = unidadHabilitada(data) ? 'disponible' : 'bloqueada'
   return mapearUnidad(data, 0, 0, estado)
 }
 
@@ -537,7 +583,7 @@ export async function obtenerLeccion(leccionId) {
     .eq('estado_publicacion', 'publicado')
     .maybeSingle()
 
-  if (error) throw crearError('No se pudo cargar la lecciÃ³n.', error)
+  if (error) throw crearError('No se pudo cargar la lección.', error)
 
   if (!data) return null
 
@@ -605,7 +651,7 @@ export async function obtenerPreguntaPorId(preguntaId) {
 // Comprueba la respuesta en el servidor mediante la funcion comprobar_respuesta.
 // Devuelve { correcta, explicacion } y NO expone la solucion correcta al cliente.
 // Acepta el mismo cuerpo por tipo que registrarRespuesta; el id de opcion sigue
-// siendo la seÃ±al para la version legacy (actividad de seleccion sin intento).
+// siendo la señal para la version legacy (actividad de seleccion sin intento).
 export async function comprobarRespuesta(preguntaId, respuesta) {
   const cuerpo = normalizarRespuestaCliente(respuesta)
   const esOpcion =
@@ -636,7 +682,7 @@ function normalizarRespuestaCliente(respuesta) {
 }
 
 // ---------------------------------------------------------------------------
-// Perfiles pÃºblicos (Liga de Honor / Buscar amigos)
+// Perfiles públicos (Liga de Honor / Buscar amigos)
 // Solo se piden los campos que el mock muestra de otros usuarios. El correo
 // nunca vive en perfiles, asi que no hay dato privado en este select.
 // ---------------------------------------------------------------------------
@@ -668,6 +714,72 @@ export async function obtenerRanking() {
   if (error) throw crearError('No se pudo cargar el ranking.', error)
 
   return data ?? []
+}
+
+// ---------------------------------------------------------------------------
+// Logros, estadisticas, repaso, diccionario y amistades
+//
+// Todo sale de RPCs que agregan datos reales de Supabase. No hay datos
+// simulados ni calculos de gamificacion en el cliente.
+// ---------------------------------------------------------------------------
+
+export async function obtenerLogros() {
+  const { data, error } = await supabase.rpc('obtener_logros')
+  if (error) throw crearError('No se pudieron cargar los logros.', error)
+
+  return (data ?? []).map((fila) => ({
+    id: fila.id,
+    clave: fila.clave,
+    nombre: fila.nombre,
+    descripcion: fila.descripcion,
+    icono: fila.icono_url || 'emoji_events',
+    recompensa: fila.experiencia_recompensa,
+    obtenido: Boolean(fila.obtenido),
+    obtenidoEn: fila.obtenido_en,
+    actual: fila.actual ?? 0,
+    objetivo: fila.objetivo ?? 0,
+  }))
+}
+
+export async function obtenerEstadisticas() {
+  const { data, error } = await supabase.rpc('obtener_estadisticas')
+  if (error) throw crearError('No se pudieron cargar las estadísticas.', error)
+  return data ?? {}
+}
+
+export async function obtenerRevision() {
+  const { data, error } = await supabase.rpc('obtener_revision')
+  if (error) throw crearError('No se pudo cargar el repaso.', error)
+  return data ?? []
+}
+
+export async function obtenerDiccionario() {
+  const { data, error } = await supabase.rpc('obtener_diccionario')
+  if (error) throw crearError('No se pudo cargar el diccionario.', error)
+  return data ?? []
+}
+
+export async function obtenerAmistades() {
+  const { data, error } = await supabase.rpc('obtener_amistades')
+  if (error) throw crearError('No se pudieron cargar tus amigos.', error)
+  return data ?? []
+}
+
+export async function enviarSolicitudAmistad(alias) {
+  const { data, error } = await supabase.rpc('enviar_solicitud_amistad', {
+    p_alias: alias,
+  })
+  if (error) throw crearError(error.message || 'No se pudo enviar la solicitud.', error)
+  return data
+}
+
+export async function responderSolicitudAmistad(amistadId, aceptar) {
+  const { error } = await supabase.rpc('responder_solicitud_amistad', {
+    p_amistad_id: amistadId,
+    p_aceptar: aceptar,
+  })
+  if (error) throw crearError(error.message || 'No se pudo responder la solicitud.', error)
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -716,7 +828,7 @@ export async function resolverLeccion(unidad, ref) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers de navegaciÃ³n
+// Helpers de navegación
 // ---------------------------------------------------------------------------
 
 export function rutaUnidad(unidad, curso) {
