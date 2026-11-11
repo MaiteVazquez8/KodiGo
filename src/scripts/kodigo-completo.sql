@@ -1045,33 +1045,25 @@ as $$
 $$;
 
 revoke all on function comprobar_respuesta(uuid, uuid) from public;
-grant execute on function comprobar_respuesta(uuid, uuid) to anon, authenticated;
 
 revoke all on function iniciar_intento(uuid, uuid) from public;
-grant execute on function iniciar_intento(uuid, uuid) to authenticated;
 
 revoke all on function registrar_respuesta(uuid, uuid, uuid) from public;
-grant execute on function registrar_respuesta(uuid, uuid, uuid) to authenticated;
 
 revoke all on function finalizar_intento(uuid) from public;
-grant execute on function finalizar_intento(uuid) to authenticated;
 
 revoke all on function obtener_progreso() from public;
-grant execute on function obtener_progreso() to authenticated;
 
 revoke all on function cantidad_preguntas_publicadas(uuid) from public;
-grant execute on function cantidad_preguntas_publicadas(uuid) to anon, authenticated;
 
 revoke all on function es_leccion_publicada(uuid) from public;
-grant execute on function es_leccion_publicada(uuid) to anon, authenticated;
 
 revoke all on function recalcular_intento(uuid) from public;
 
-revoke all on function comprobar_respuesta(uuid, jsonb) from public;
-grant execute on function comprobar_respuesta(uuid, jsonb) to anon, authenticated;
+-- La sobrecarga comprobar_respuesta(uuid, jsonb) recien se define en el
+-- bloque ETAPA 8 (al final del script). Sus permisos se otorgan ahi.
 
 revoke all on function registrar_respuesta(uuid, uuid, jsonb) from public;
-grant execute on function registrar_respuesta(uuid, uuid, jsonb) to authenticated;
 
 revoke all on function desbloquear_siguiente_unidad(uuid, uuid) from public;
 
@@ -1197,15 +1189,9 @@ begin
     alter table preguntas alter column tipo set default 'seleccion';
 
     alter table preguntas drop constraint if exists preguntas_tipo_check;
-    alter table preguntas
-    add constraint preguntas_tipo_check check (tipo in (
-        'seleccion',
-        'verdadero_falso',
-        'completar_texto',
-        'completar_codigo',
-        'ordenar',
-        'relacionar'
-    ));
+    -- La restriccion definitiva se re-agrega en el bloque ETAPA 8 con los once
+    -- tipos. No se re-agrega aca: en una re-aplicacion sobre una base con
+    -- tipos ampliados, validar filas existentes contra solo seis tipos falla.
 
     alter table soluciones alter column opcion_correcta_id drop not null;
     alter table soluciones add column if not exists solucion jsonb;
@@ -1312,240 +1298,6 @@ values
 )
 on conflict (id) do nothing;
 
-insert into preguntas (id, leccion_id, enunciado, tipo, orden, estado_publicacion)
-values
-(
-    '40000000-0000-0000-0000-000000000001',
-    '30000000-0000-0000-0000-000000000001',
-    '¿Cuál de estas líneas declara correctamente una variable llamada edad con el valor 18?',
-    'multiple_choice',
-    1,
-    'publicado'
-),
-(
-    '40000000-0000-0000-0000-000000000002',
-    '30000000-0000-0000-0000-000000000001',
-    '¿Qué valor completa la sentencia para guardar el nombre de una persona?\nlet nombre = ___;',
-    'multiple_choice',
-    2,
-    'publicado'
-),
-(
-    '40000000-0000-0000-0000-000000000003',
-    '30000000-0000-0000-0000-000000000001',
-    '¿Qué opción representa una asignación válida de una constante?',
-    'multiple_choice',
-    3,
-    'publicado'
-),
-(
-    '40000000-0000-0000-0000-000000000004',
-    '30000000-0000-0000-0000-000000000002',
-    '¿Qué resultado devuelve 12 + 5?',
-    'multiple_choice',
-    1,
-    'publicado'
-),
-(
-    '40000000-0000-0000-0000-000000000005',
-    '30000000-0000-0000-0000-000000000002',
-    '¿Qué operador completa la sentencia para calcular el resto de la división?\nlet resto = 10 ___ 3;',
-    'multiple_choice',
-    2,
-    'publicado'
-),
-(
-    '40000000-0000-0000-0000-000000000006',
-    '30000000-0000-0000-0000-000000000002',
-    '¿Cuál de estas expresiones calcula correctamente el total de 4 × 3?',
-    'multiple_choice',
-    3,
-    'publicado'
-)
-on conflict (id) do nothing;
-
-insert into opciones (id, pregunta_id, texto, orden)
-values
-(
-    '50000000-0000-0000-0000-000000000001',
-    '40000000-0000-0000-0000-000000000001',
-    'let edad = 18;',
-    1
-),
-(
-    '50000000-0000-0000-0000-000000000002',
-    '40000000-0000-0000-0000-000000000001',
-    'let 18 = edad;',
-    2
-),
-(
-    '50000000-0000-0000-0000-000000000003',
-    '40000000-0000-0000-0000-000000000001',
-    'const edad;',
-    3
-),
-(
-    '50000000-0000-0000-0000-000000000004',
-    '40000000-0000-0000-0000-000000000001',
-    'edad = 18;',
-    4
-),
-(
-    '50000000-0000-0000-0000-000000000005',
-    '40000000-0000-0000-0000-000000000002',
-    '"Ana"',
-    1
-),
-(
-    '50000000-0000-0000-0000-000000000006',
-    '40000000-0000-0000-0000-000000000002',
-    'Ana',
-    2
-),
-(
-    '50000000-0000-0000-0000-000000000007',
-    '40000000-0000-0000-0000-000000000002',
-    '18',
-    3
-),
-(
-    '50000000-0000-0000-0000-000000000008',
-    '40000000-0000-0000-0000-000000000002',
-    'let',
-    4
-),
-(
-    '50000000-0000-0000-0000-000000000009',
-    '40000000-0000-0000-0000-000000000003',
-    'const apellido = "Pérez";',
-    1
-),
-(
-    '50000000-0000-0000-0000-000000000010',
-    '40000000-0000-0000-0000-000000000003',
-    'const = "Pérez";',
-    2
-),
-(
-    '50000000-0000-0000-0000-000000000011',
-    '40000000-0000-0000-0000-000000000003',
-    'let const = "Pérez";',
-    3
-),
-(
-    '50000000-0000-0000-0000-000000000012',
-    '40000000-0000-0000-0000-000000000003',
-    'apellido = const;',
-    4
-),
-(
-    '50000000-0000-0000-0000-000000000013',
-    '40000000-0000-0000-0000-000000000004',
-    '17',
-    1
-),
-(
-    '50000000-0000-0000-0000-000000000014',
-    '40000000-0000-0000-0000-000000000004',
-    '7',
-    2
-),
-(
-    '50000000-0000-0000-0000-000000000015',
-    '40000000-0000-0000-000000000004',
-    '60',
-    3
-),
-(
-    '50000000-0000-0000-0000-000000000016',
-    '40000000-0000-0000-0000-000000000004',
-    '125',
-    4
-),
-(
-    '50000000-0000-0000-0000-000000000017',
-    '40000000-0000-0000-0000-000000000005',
-    '%',
-    1
-),
-(
-    '50000000-0000-0000-0000-000000000018',
-    '40000000-0000-0000-0000-000000000005',
-    '/',
-    2
-),
-(
-    '50000000-0000-0000-0000-000000000019',
-    '40000000-0000-0000-0000-000000000005',
-    '+',
-    3
-),
-(
-    '50000000-0000-0000-0000-000000000020',
-    '40000000-0000-0000-0000-000000000005',
-    '*',
-    4
-),
-(
-    '50000000-0000-0000-0000-000000000021',
-    '40000000-0000-0000-0000-000000000006',
-    '4 * 3',
-    1
-),
-(
-    '50000000-0000-0000-0000-000000000022',
-    '40000000-0000-0000-0000-000000000006',
-    '4 + 3',
-    2
-),
-(
-    '50000000-0000-0000-0000-000000000023',
-    '40000000-0000-0000-0000-000000000006',
-    '4 / 3',
-    3
-),
-(
-    '50000000-0000-0000-0000-000000000024',
-    '40000000-0000-0000-0000-000000000006',
-    '4 % 3',
-    4
-)
-on conflict (id) do nothing;
-
-insert into soluciones (pregunta_id, opcion_correcta_id, explicacion)
-values
-(
-    '40000000-0000-0000-0000-000000000001',
-    '50000000-0000-0000-0000-000000000001',
-    'La sintaxis correcta es declarar la variable con let, poner el nombre y luego asignarle el valor con =.'
-),
-(
-    '40000000-0000-0000-0000-000000000002',
-    '50000000-0000-0000-0000-000000000005',
-    'Los textos en JavaScript deben ir entre comillas. Por eso el valor correcto es "Ana".'
-),
-(
-    '40000000-0000-0000-0000-000000000003',
-    '50000000-0000-0000-0000-000000000009',
-    'const se usa para declarar una constante, seguida del nombre y el valor. La sintaxis es const nombre = valor;'
-),
-(
-    '40000000-0000-0000-0000-000000000004',
-    '50000000-0000-0000-0000-000000000013',
-    'La suma combina ambos valores numéricos y da 17.'
-),
-(
-    '40000000-0000-0000-0000-000000000005',
-    '50000000-0000-0000-0000-000000000017',
-    'El operador % devuelve el resto de la división: 10 % 3 da 1.'
-),
-(
-    '40000000-0000-0000-0000-000000000006',
-    '50000000-0000-0000-0000-000000000021',
-    'La multiplicación usa el operador *. 4 * 3 equivale a 12.'
-)
-on conflict (pregunta_id) do nothing;
-
 do $$
 begin
     if not exists (
@@ -1577,6 +1329,61 @@ where ejemplo_codigo like E'%\\n%'
 
 -- ===========================================================================
 -- Ampliacion de curricula (Etapa 6)
+-- ===========================================================================
+-- Lecciones JavaScript que faltaban en el seed (003 a 007)
+-- El seed original insertaba 001, 002, 008, 009 y 010 y actualizaba textos de
+-- 003..007 sin haberlas creado; por eso el curso arrancaba incompleto.
+-- Inserta exactamente las cinco faltantes. Idempotente.
+-- ===========================================================================
+insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion)
+values
+(
+    '30000000-0000-0000-0000-000000000003',
+    '20000000-0000-0000-0000-000000000001',
+    'Condicionales con if',
+    'Con if y else, el programa ejecuta un bloque solo cuando la condicion se cumple. El operador === compara valor y tipo al mismo tiempo.',
+    E'const edad = 15;\nif (edad >= 18) {\n  console.log("Es adulto");\n} else {\n  console.log("Menor");\n}',
+    3,
+    'publicado'
+),
+(
+    '30000000-0000-0000-0000-000000000004',
+    '20000000-0000-0000-0000-000000000002',
+    'Bucles for',
+    'Un bucle for tiene tres partes: valor inicial, condicion de continuacion y paso. El cuerpo corre en cada vuelta mientras la condicion sea verdadera.',
+    E'let suma = 0;\nfor (let i = 1; i <= 5; i++) {\n  suma = suma + i;\n}\nconsole.log(suma);',
+    1,
+    'publicado'
+),
+(
+    '30000000-0000-0000-0000-000000000005',
+    '20000000-0000-0000-0000-000000000002',
+    'Bucles while',
+    'El bucle while repite mientras la condicion sea verdadera. Sin un cambio que la vuelva falsa, el bucle no termina nunca.',
+    E'let contador = 3;\nwhile (contador > 0) {\n  console.log(contador);\n  contador = contador - 1;\n}\nconsole.log("Despegue");',
+    2,
+    'publicado'
+),
+(
+    '30000000-0000-0000-0000-000000000006',
+    '20000000-0000-0000-0000-000000000002',
+    'Funciones',
+    'Una funcion agrupa codigo para reutilizarlo: recibe parametros, hace su trabajo y devuelve un resultado con return.',
+    E'function doble(x) {\n  return x * 2;\n}\nconsole.log(doble(5));',
+    3,
+    'publicado'
+),
+(
+    '30000000-0000-0000-0000-000000000007',
+    '20000000-0000-0000-0000-000000000002',
+    'Arrays y listas',
+    'Un array guarda una lista de valores con indices: el primero es la posicion 0. length dice cuantos elementos tiene y push agrega al final.',
+    E'const frutas = ["pera", "manzana"];\nconsole.log(frutas[0]);\nconsole.log(frutas.length);',
+    4,
+    'publicado'
+)
+on conflict (id) do nothing;
+
 -- ===========================================================================
 
 -- Reorden de bandas de orden para evitar choques de unique en la
@@ -1655,8 +1462,16 @@ values (
       orden = excluded.orden,
       estado_publicacion = excluded.estado_publicacion;
 
+-- Limpieza de la vieja curricula de JavaScript: elimina las unidades JS
+-- antiguas que no son las tres actuales. Sólo afecta al curso de
+-- JavaScript; las unidades generadas por md5 (HTML, ExpoTécnica) quedan.
 delete from unidades
-where id > '20000000-0000-0000-0000-000000000003'::uuid;
+where curso_id = '10000000-0000-0000-0000-000000000001'::uuid
+  and id <> all (array[
+    '20000000-0000-0000-0000-000000000001'::uuid,
+    '20000000-0000-0000-0000-000000000002'::uuid,
+    '20000000-0000-0000-0000-000000000003'::uuid
+  ]);
 
 update lecciones set
   titulo = 'Variables y tipos de datos',
@@ -1700,11 +1515,99 @@ update lecciones set
   ejemplo_codigo = E'const frutas = ["pera", "manzana"];\nconsole.log(frutas[0]);\nconsole.log(frutas.length);'
 where id = '30000000-0000-0000-0000-000000000007'::uuid;
 
--- Limpieza de la vieja curricula de JavaScript (3 preguntas por leccion).
+-- ===========================================================================
+-- 20. Reparacion del seed de JavaScript (leccion_id de las preguntas)
+--
+-- La primera vez que se aplico el seed faltaban lecciones (003..007), por
+-- lo que las preguntas de esas lecciones se asociaron a las equivocadas o
+-- directamente no se insertaron. Este bloque las reasocia al estado
+-- correcto. Es idempotente: en bases frescas es un no-op.
+-- ===========================================================================
 
-delete from preguntas
-where id between '40000000-0000-0000-0000-000000000001'::uuid
-             and '40000000-0000-0000-0000-000000000006'::uuid;
+with mapa(prefijo, clave, leccion) as (values
+  ('js2', 'js2:l01:a1', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('js2', 'js2:l01:a2', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('js2', 'js2:l01:a3', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('js2', 'js2:l02:a1', '30000000-0000-0000-0000-000000000002'::uuid),
+  ('js2', 'js2:l02:a2', '30000000-0000-0000-0000-000000000002'::uuid),
+  ('js2', 'js2:l03:a1', '30000000-0000-0000-0000-000000000003'::uuid),
+  ('js2', 'js2:l03:a2', '30000000-0000-0000-0000-000000000003'::uuid),
+  ('js2', 'js2:l03:a3', '30000000-0000-0000-0000-000000000003'::uuid),
+  ('js2', 'js2:l04:a1', '30000000-0000-0000-0000-000000000004'::uuid),
+  ('js2', 'js2:l04:a2', '30000000-0000-0000-0000-000000000004'::uuid),
+  ('js2', 'js2:l05:a1', '30000000-0000-0000-0000-000000000005'::uuid),
+  ('js2', 'js2:l05:a2', '30000000-0000-0000-0000-000000000005'::uuid),
+  ('js2', 'js2:l06:a1', '30000000-0000-0000-0000-000000000006'::uuid),
+  ('js2', 'js2:l06:a2', '30000000-0000-0000-0000-000000000006'::uuid),
+  ('js2', 'js2:l07:a1', '30000000-0000-0000-0000-000000000007'::uuid),
+  ('js2', 'js2:l07:a2', '30000000-0000-0000-0000-000000000007'::uuid),
+  ('js2', 'js2:l08:a1', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js2', 'js2:l08:a2', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js2', 'js2:l09:a1', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js2', 'js2:l09:a2', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js2', 'js2:l09:a3', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js2', 'js2:l10:a1', '30000000-0000-0000-0000-000000000010'::uuid),
+  ('js2', 'js2:l10:a2', '30000000-0000-0000-0000-000000000010'::uuid),
+  ('js', 'js:l01:a1', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('js', 'js:l01:a2', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('js', 'js:l01:a3', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('js', 'js:l01:a4', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('js', 'js:l02:a1', '30000000-0000-0000-0000-000000000002'::uuid),
+  ('js', 'js:l02:a2', '30000000-0000-0000-0000-000000000002'::uuid),
+  ('js', 'js:l02:a3', '30000000-0000-0000-0000-000000000002'::uuid),
+  ('js', 'js:l02:a4', '30000000-0000-0000-0000-000000000002'::uuid),
+  ('js', 'js:l03:a1', '30000000-0000-0000-0000-000000000003'::uuid),
+  ('js', 'js:l03:a2', '30000000-0000-0000-0000-000000000003'::uuid),
+  ('js', 'js:l03:a3', '30000000-0000-0000-0000-000000000003'::uuid),
+  ('js', 'js:l03:a4', '30000000-0000-0000-0000-000000000003'::uuid),
+  ('js', 'js:l04:a1', '30000000-0000-0000-0000-000000000004'::uuid),
+  ('js', 'js:l04:a2', '30000000-0000-0000-0000-000000000004'::uuid),
+  ('js', 'js:l04:a3', '30000000-0000-0000-0000-000000000004'::uuid),
+  ('js', 'js:l04:a4', '30000000-0000-0000-0000-000000000004'::uuid),
+  ('js', 'js:l04:a5', '30000000-0000-0000-0000-000000000004'::uuid),
+  ('js', 'js:l05:a1', '30000000-0000-0000-0000-000000000005'::uuid),
+  ('js', 'js:l05:a2', '30000000-0000-0000-0000-000000000005'::uuid),
+  ('js', 'js:l05:a3', '30000000-0000-0000-0000-000000000005'::uuid),
+  ('js', 'js:l05:a4', '30000000-0000-0000-0000-000000000005'::uuid),
+  ('js', 'js:l05:a5', '30000000-0000-0000-0000-000000000005'::uuid),
+  ('js', 'js:l06:a1', '30000000-0000-0000-0000-000000000006'::uuid),
+  ('js', 'js:l06:a2', '30000000-0000-0000-0000-000000000006'::uuid),
+  ('js', 'js:l06:a3', '30000000-0000-0000-0000-000000000006'::uuid),
+  ('js', 'js:l06:a4', '30000000-0000-0000-0000-000000000006'::uuid),
+  ('js', 'js:l06:a5', '30000000-0000-0000-0000-000000000006'::uuid),
+  ('js', 'js:l07:a1', '30000000-0000-0000-0000-000000000007'::uuid),
+  ('js', 'js:l07:a2', '30000000-0000-0000-0000-000000000007'::uuid),
+  ('js', 'js:l07:a3', '30000000-0000-0000-0000-000000000007'::uuid),
+  ('js', 'js:l07:a4', '30000000-0000-0000-0000-000000000007'::uuid),
+  ('js', 'js:l07:a5', '30000000-0000-0000-0000-000000000007'::uuid),
+  ('js', 'js:l08:a1', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js', 'js:l08:a2', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js', 'js:l08:a3', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js', 'js:l08:a4', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js', 'js:l08:a5', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js', 'js:l08:a6', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js', 'js:l08:a7', '30000000-0000-0000-0000-000000000008'::uuid),
+  ('js', 'js:l09:a1', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js', 'js:l09:a2', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js', 'js:l09:a3', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js', 'js:l09:a4', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js', 'js:l09:a5', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js', 'js:l09:a6', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js', 'js:l09:a7', '30000000-0000-0000-0000-000000000009'::uuid),
+  ('js', 'js:l10:a1', '30000000-0000-0000-0000-000000000010'::uuid),
+  ('js', 'js:l10:a2', '30000000-0000-0000-0000-000000000010'::uuid),
+  ('js', 'js:l10:a3', '30000000-0000-0000-0000-000000000010'::uuid),
+  ('js', 'js:l10:a4', '30000000-0000-0000-0000-000000000010'::uuid),
+  ('js', 'js:l10:a5', '30000000-0000-0000-0000-000000000010'::uuid),
+  ('js', 'js:l10:a6', '30000000-0000-0000-0000-000000000010'::uuid),
+  ('js', 'js:l10:a7', '30000000-0000-0000-0000-000000000010'::uuid)
+)
+update preguntas p
+set leccion_id = m.leccion
+from mapa m
+where p.id = uuid(md5('kodigo:preg:' || m.prefijo || ':' || m.clave))
+  and p.leccion_id <> m.leccion;
+
 -- ---------------------------------------------------------------------------
 -- Contenido: JavaScript (53 actividades: 4/5/7 por dificultad)
 -- ---------------------------------------------------------------------------
@@ -2451,7 +2354,6 @@ values
   'publicado'
 ) on conflict (id) do nothing;
 
-
 -- ACTIVIDADES HTML: unidad 1 (Estructura y texto, 3 lecciones x 4)
 with lecciones_num as (
   select id,
@@ -2525,7 +2427,6 @@ from (values
 ) as c(clave, leccion, enunciado, tipo, datos, orden)
 join lecciones_num l on l.n = c.leccion
 on conflict (id) do nothing;
-
 
 -- ACTIVIDADES HTML: unidad 2 (Interactividad, 4 lecciones x 5)
 with lecciones_num as (
@@ -2635,7 +2536,6 @@ from (values
 ) as c(clave, leccion, enunciado, tipo, datos, orden)
 join lecciones_num l on l.n = c.leccion
 on conflict (id) do nothing;
-
 
 -- ACTIVIDADES HTML: unidad 3 (Detalle y proyecto, 3 lecciones x 7)
 with lecciones_num as (
@@ -2747,7 +2647,6 @@ from (values
 ) as c(clave, leccion, enunciado, tipo, datos, orden)
 join lecciones_num l on l.n = c.leccion
 on conflict (id) do nothing;
-
 
 -- Opciones HTML: seleccion, verdadero_falso y los elementos de ordenar.
 -- La posicion de la correcta varIa por pregunta; en ordenar es el orden natural.
@@ -2872,7 +2771,6 @@ from (values
 join preguntas p on p.id = uuid(md5('kodigo:preg:html:' || c.clave_preg))
 on conflict (id) do nothing;
 
-
 -- Soluciones HTML: correcta por texto de opcion en seleccion / verdadero_falso.
 insert into soluciones (id, pregunta_id, opcion_correcta_id, explicacion)
 select
@@ -2903,7 +2801,7 @@ from (values
   ('html:l09:a4', 'Asocia el texto con el campo cuyo id coincide', 'for="email" conecta el label con el input de id email: clic en el texto enfoca el campo.'),
   ('html:l09:a6', 'Verdadero', 'El navegador tapa los caracteres con puntos o asteriscos en el campo tipo password.'),
   ('html:l10:a3', 'Abre el programa de correo para escribir a contacto@kodigo.org', 'El esquema mailto: prepara un correo nuevo con ese destinatario.'),
-  ('html:l10:a6', 'Verdadero', 'El datalist lista sugerencias y el input las ofrece al usuario que escribe.')
+  ('html:l10:a6', 'Verdadero', 'El datalist lista sugerencias y el input las ofrece al usuario que escribe.'),
   ('html:l10:a7', '<strong>', 'strong da importancia semantica; <b> es solo estilo visual y <em> es enfasis.')
 ) as s(clave_preg, correcta, explicacion)
 join preguntas p on p.id = uuid(md5('kodigo:preg:html:' || s.clave_preg))
@@ -2953,7 +2851,6 @@ from (values
 join preguntas p on p.id = uuid(md5('kodigo:preg:html:' || e.clave_preg))
 on conflict (pregunta_id) do nothing;
 
-
 -- Soluciones HTML de completar_codigo: la respuesta vive en datos de la pregunta.
 insert into soluciones (id, pregunta_id, solucion, explicacion)
 select
@@ -2977,7 +2874,6 @@ from (values
 ) as e(clave_preg, solucion, explicacion)
 join preguntas p on p.id = uuid(md5('kodigo:preg:html:' || e.clave_preg))
 on conflict (pregunta_id) do nothing;
-
 
 -- Soluciones HTML de relacionar: los pares correctos con los ids de datos.
 insert into soluciones (id, pregunta_id, solucion, explicacion)
@@ -6021,95 +5917,62 @@ $$;
 -- ---------------------------------------------------------------------------
 
 revoke all on function expotec_evento_activo() from public;
-grant execute on function expotec_evento_activo() to anon, authenticated;
 
 revoke all on function expotec_alias_disponible(uuid, text) from public;
-grant execute on function expotec_alias_disponible(uuid, text) to anon, authenticated;
 
 revoke all on function expotec_iniciar_partida(uuid, text) from public;
-grant execute on function expotec_iniciar_partida(uuid, text) to authenticated;
 
 revoke all on function expotec_estado_partida(uuid) from public;
-grant execute on function expotec_estado_partida(uuid) to authenticated;
 
 revoke all on function expotec_responder(uuid, uuid, uuid) from public;
-grant execute on function expotec_responder(uuid, uuid, uuid) to authenticated;
 
 revoke all on function expotec_iniciar_juego(uuid) from public;
-grant execute on function expotec_iniciar_juego(uuid) to authenticated;
 
 revoke all on function expotec_checkpoint_juego(uuid, jsonb) from public;
-grant execute on function expotec_checkpoint_juego(uuid, jsonb) to authenticated;
 
 revoke all on function expotec_finalizar_juego(uuid, integer, integer, numeric, jsonb) from public;
-grant execute on function expotec_finalizar_juego(uuid, integer, integer, numeric, jsonb)
-    to authenticated;
 
 revoke all on function expotec_abandonar(uuid) from public;
-grant execute on function expotec_abandonar(uuid) to authenticated;
 
 revoke all on function expotec_obtener_soluciones(uuid) from public;
-grant execute on function expotec_obtener_soluciones(uuid) to authenticated;
 
 revoke all on function expotec_mis_partidas(uuid) from public;
-grant execute on function expotec_mis_partidas(uuid) to authenticated;
 
 revoke all on function expotec_resultado_propio(uuid) from public;
-grant execute on function expotec_resultado_propio(uuid) to authenticated;
 
 revoke all on function expotec_ranking(uuid, integer) from public;
-grant execute on function expotec_ranking(uuid, integer) to anon, authenticated;
 
 -- Panel de administracion: todos autenticados pueden ejecutarlas, el guard
 -- interno distingue a los administradores y devuelve error al resto.
 revoke all on function expotec_admin_es_admin() from public;
-grant execute on function expotec_admin_es_admin() to authenticated;
 
 revoke all on function expotec_admin_guardar_curso(uuid, jsonb) from public;
-grant execute on function expotec_admin_guardar_curso(uuid, jsonb) to authenticated;
 
 revoke all on function expotec_admin_guardar_unidad(uuid, jsonb) from public;
-grant execute on function expotec_admin_guardar_unidad(uuid, jsonb) to authenticated;
 
 revoke all on function expotec_admin_guardar_leccion(uuid, jsonb) from public;
-grant execute on function expotec_admin_guardar_leccion(uuid, jsonb) to authenticated;
 
 revoke all on function expotec_admin_guardar_pregunta(uuid, jsonb) from public;
-grant execute on function expotec_admin_guardar_pregunta(uuid, jsonb) to authenticated;
 
 revoke all on function expotec_admin_crear_pregunta_completa(uuid, text, jsonb, integer, text, integer) from public;
-grant execute on function expotec_admin_crear_pregunta_completa(uuid, text, jsonb, integer, text, integer)
-    to authenticated;
 
 revoke all on function expotec_admin_guardar_opcion(uuid, jsonb) from public;
-grant execute on function expotec_admin_guardar_opcion(uuid, jsonb) to authenticated;
 
 revoke all on function expotec_admin_definir_solucion(uuid, uuid, text) from public;
-grant execute on function expotec_admin_definir_solucion(uuid, uuid, text) to authenticated;
 
 revoke all on function expotec_admin_cambiar_estado_contenido(text, uuid, text) from public;
-grant execute on function expotec_admin_cambiar_estado_contenido(text, uuid, text) to authenticated;
 
 revoke all on function expotec_admin_crear_evento(text, text, timestamptz, timestamptz) from public;
-grant execute on function expotec_admin_crear_evento(text, text, timestamptz, timestamptz)
-    to authenticated;
 
 revoke all on function expotec_admin_actualizar_evento(uuid, jsonb) from public;
-grant execute on function expotec_admin_actualizar_evento(uuid, jsonb) to authenticated;
 
 revoke all on function expotec_admin_cambiar_estado_evento(uuid, text) from public;
-grant execute on function expotec_admin_cambiar_estado_evento(uuid, text) to authenticated;
 
 revoke all on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[]) from public;
-grant execute on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[])
-    to authenticated;
 
 revoke all on function expotec_admin_estadisticas_evento(uuid) from public;
-grant execute on function expotec_admin_estadisticas_evento(uuid) to authenticated;
 
 revoke all on function expotec_admin_resultados_evento(uuid, text, integer) from public;
-grant execute on function expotec_admin_resultados_evento(uuid, text, integer)
-    to authenticated;
 
 -- Helpers internos: solo los consumen las demas funciones del servidor.
 revoke all on function expotec_alias_normalizado(text) from public;
@@ -6121,7 +5984,7 @@ revoke all on function expotec_intentos_gastados(uuid, uuid) from public;
 revoke all on function expotec_progreso_partida_jsonb(uuid, boolean) from public;
 revoke all on function expotec_tope_destruidos(numeric) from public;
 revoke all on function expotec_guard_admin() from public;
-revoke all on function expotec_inconveniente_pregunta(uuid) from public;
+-- expotec_inconveniente_pregunta se crea mas tarde: sus permisos van ahi.
 revoke all on function expotec_inconveniente_leccion(uuid) from public;
 revoke all on function expotec_inconveniente_unidad(uuid) from public;
 revoke all on function expotec_inconveniente_curso(uuid) from public;
@@ -6763,6 +6626,9 @@ begin
     return query select v_correcta, v_explicacion;
 end;
 $$;
+
+-- Permisos de la sobrecarga jsonb recien creada.
+revoke all on function comprobar_respuesta(uuid, jsonb) from public;
 
 -- ---------------------------------------------------------------------------
 -- 9. Nivel, racha, XP y logros
@@ -7456,6 +7322,8 @@ begin
 end;
 $$;
 
+revoke all on function expotec_inconveniente_pregunta(uuid) from public;
+
 -- Guarda o actualiza una actividad de cualquier modalidad. Las opciones solo
 -- se tocan si la actividad no tiene respuestas registradas, para no romper el
 -- historial de los estudiantes.
@@ -7678,25 +7546,18 @@ revoke all on function progreso_logro(uuid, jsonb) from public;
 revoke all on function evaluar_logros(uuid) from public;
 
 revoke all on function obtener_logros() from public;
-grant execute on function obtener_logros() to authenticated;
 
 revoke all on function obtener_estadisticas() from public;
-grant execute on function obtener_estadisticas() to authenticated;
 
 revoke all on function obtener_revision() from public;
-grant execute on function obtener_revision() to authenticated;
 
 revoke all on function obtener_amistades() from public;
-grant execute on function obtener_amistades() to authenticated;
 
 revoke all on function enviar_solicitud_amistad(text) from public;
-grant execute on function enviar_solicitud_amistad(text) to authenticated;
 
 revoke all on function responder_solicitud_amistad(uuid, boolean) from public;
-grant execute on function responder_solicitud_amistad(uuid, boolean) to authenticated;
 
 revoke all on function expotec_admin_guardar_actividad(uuid, jsonb) from public;
-grant execute on function expotec_admin_guardar_actividad(uuid, jsonb) to authenticated;
 
 -- ===========================================================================
 -- 16. Logros, diccionario y consulta de unidades desbloqueadas
@@ -7721,7 +7582,6 @@ as $$
 $$;
 
 revoke all on function obtener_unidades_desbloqueadas() from public;
-grant execute on function obtener_unidades_desbloqueadas() to authenticated;
 
 create or replace function obtener_diccionario()
 returns table (
@@ -7741,7 +7601,6 @@ as $$
 $$;
 
 revoke all on function obtener_diccionario() from public;
-grant execute on function obtener_diccionario() to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 16.1 Catalogo de logros (se auto-otorgan al cerrar un intento)
@@ -8255,3 +8114,75 @@ on conflict (pregunta_id) do nothing;
 
 revoke update on public.perfiles from authenticated, anon;
 grant update (nombre_usuario, nombre_visible, avatar_url) on public.perfiles to authenticated;
+
+-- ===========================================================================
+-- 21. Permisos explicitos de funciones
+--
+-- Los default privileges del proyecto conceden EXECUTE sobre cada funcion
+-- recien creada a anon, authenticated y service_role. El REVOKE FROM PUBLIC
+-- interno no alcanza. Se revoca de forma explicita a anon y authenticated y
+-- se vuelve a conceder solo lo que la app necesita.
+--   anon:         las RPC publicas por diseno y la comprobacion de respuestas.
+--   authenticated:lo que la app consume con sesion (la autoriniacion real la
+--                 hace cada funcion validando auth.uid(); admins validados
+--                 aparte por expotec_guard_admin()).
+--   Internas:     quedan sin EXECUTE para nadie; las invocan otras funciones
+--                 del servidor (owner).
+-- ===========================================================================
+
+revoke execute on all functions in schema public from anon;
+revoke execute on all functions in schema public from authenticated;
+
+-- Publicas (sin sesion).
+grant execute on function comprobar_respuesta(uuid, uuid) to anon, authenticated;
+grant execute on function comprobar_respuesta(uuid, jsonb) to anon, authenticated;
+grant execute on function es_administrador_expotec() to anon, authenticated;
+grant execute on function cantidad_preguntas_publicadas(uuid) to anon, authenticated;
+grant execute on function es_leccion_publicada(uuid) to anon, authenticated;
+grant execute on function obtener_diccionario() to anon, authenticated;
+grant execute on function expotec_evento_activo() to anon, authenticated;
+grant execute on function expotec_ranking(uuid, integer) to anon, authenticated;
+grant execute on function expotec_alias_disponible(uuid, text) to anon, authenticated;
+
+-- Autenticadas (app con sesion).
+grant execute on function iniciar_intento(uuid, uuid) to authenticated;
+grant execute on function registrar_respuesta(uuid, uuid, uuid) to authenticated;
+grant execute on function registrar_respuesta(uuid, uuid, jsonb) to authenticated;
+grant execute on function finalizar_intento(uuid) to authenticated;
+grant execute on function obtener_progreso() to authenticated;
+grant execute on function obtener_unidades_desbloqueadas() to authenticated;
+grant execute on function obtener_logros() to authenticated;
+grant execute on function obtener_estadisticas() to authenticated;
+grant execute on function obtener_revision() to authenticated;
+grant execute on function obtener_amistades() to authenticated;
+grant execute on function enviar_solicitud_amistad(text) to authenticated;
+grant execute on function responder_solicitud_amistad(uuid, boolean) to authenticated;
+grant execute on function expotec_iniciar_partida(uuid, text) to authenticated;
+grant execute on function expotec_estado_partida(uuid) to authenticated;
+grant execute on function expotec_responder(uuid, uuid, uuid) to authenticated;
+grant execute on function expotec_iniciar_juego(uuid) to authenticated;
+grant execute on function expotec_checkpoint_juego(uuid, jsonb) to authenticated;
+grant execute on function expotec_finalizar_juego(uuid, integer, integer, numeric, jsonb) to authenticated;
+grant execute on function expotec_abandonar(uuid) to authenticated;
+grant execute on function expotec_obtener_soluciones(uuid) to authenticated;
+grant execute on function expotec_resultado_propio(uuid) to authenticated;
+grant execute on function expotec_mis_partidas(uuid) to authenticated;
+grant execute on function expotec_admin_es_admin() to authenticated;
+grant execute on function expotec_admin_guardar_curso(uuid, jsonb) to authenticated;
+grant execute on function expotec_admin_guardar_unidad(uuid, jsonb) to authenticated;
+grant execute on function expotec_admin_guardar_leccion(uuid, jsonb) to authenticated;
+grant execute on function expotec_admin_guardar_pregunta(uuid, jsonb) to authenticated;
+grant execute on function expotec_admin_crear_pregunta_completa(uuid, text, jsonb, integer, text, integer) to authenticated;
+grant execute on function expotec_admin_guardar_opcion(uuid, jsonb) to authenticated;
+grant execute on function expotec_admin_definir_solucion(uuid, uuid, text) to authenticated;
+grant execute on function expotec_admin_cambiar_estado_contenido(text, uuid, text) to authenticated;
+grant execute on function expotec_admin_guardar_actividad(uuid, jsonb) to authenticated;
+grant execute on function expotec_admin_crear_evento(text, text, timestamptz, timestamptz)
+    to authenticated;
+grant execute on function expotec_admin_actualizar_evento(uuid, jsonb) to authenticated;
+grant execute on function expotec_admin_cambiar_estado_evento(uuid, text) to authenticated;
+grant execute on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[])
+    to authenticated;
+grant execute on function expotec_admin_estadisticas_evento(uuid) to authenticated;
+grant execute on function expotec_admin_resultados_evento(uuid, text, integer)
+    to authenticated;
