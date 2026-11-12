@@ -147,8 +147,8 @@
               Configuración vigente: {{ desafioActual.cantidadPreguntas }} preguntas ·
               {{ desafioActual.puntosPorCorrecta }} puntos por correcta ·
               {{ desafioActual.tiempoCuestionarioSeg == null ? 'cuestionario sin límite' : `cuestionario ${desafioActual.tiempoCuestionarioSeg}s` }} ·
-              juego {{ desafioActual.duracionJuegoSeg }}s con {{ desafioActual.vidasJuego }} vidas y
-              {{ desafioActual.intentosPermitidos }} {{ desafioActual.intentosPermitidos === 1 ? 'intento' : 'intentos' }}.
+              juego {{ desafioActual.duracionJuegoSeg }}s con {{ desafioActual.vidasJuego }} vidas ·
+              intentos ilimitados por persona.
             </p>
             <p v-else class="admin-nota">Este evento todavía no tiene desafío: definilo abajo.</p>
 
@@ -223,18 +223,8 @@
                     :disabled="Boolean(desafioCongelado)"
                   />
                 </label>
-                <label class="admin-par">
-                  <span class="admin-lbl">Intentos por persona</span>
-                  <input
-                    v-model.number="desafioEdicion.intentosPermitidos"
-                    type="number"
-                    min="1"
-                    max="20"
-                    class="admin-campo"
-                    :disabled="Boolean(desafioCongelado)"
-                  />
-                </label>
               </div>
+              <p class="admin-nota">Los intentos son ilimitados por persona: el desafío se puede repetir libremente; el mejor intento por alias es el que queda en el ranking.</p>
 
               <h3 class="admin-h3">Banco de actividades</h3>
               <p class="admin-nota">
@@ -770,7 +760,6 @@ const desafioEdicion = reactive({
   tiempoCuestionarioSeg: '',
   duracionJuegoSeg: 180,
   vidasJuego: 3,
-  intentosPermitidos: 1,
 })
 const seleccionadas = ref([])
 const banco = ref([])
@@ -1024,7 +1013,6 @@ function precargarEdicion(desafio) {
     desafio?.tiempoCuestionarioSeg == null ? '' : String(desafio.tiempoCuestionarioSeg)
   desafioEdicion.duracionJuegoSeg = desafio?.duracionJuegoSeg ?? 180
   desafioEdicion.vidasJuego = desafio?.vidasJuego ?? 3
-  desafioEdicion.intentosPermitidos = desafio?.intentosPermitidos ?? 1
 }
 
 async function guardarDesafio() {
@@ -1051,7 +1039,6 @@ async function guardarDesafio() {
         tiempo_cuestionario_seg: tiempo === '' ? null : Number(tiempo),
         duracion_juego_seg: Number(desafioEdicion.duracionJuegoSeg),
         vidas_juego: Number(desafioEdicion.vidasJuego),
-        intentos_permitidos: Number(desafioEdicion.intentosPermitidos),
       },
       seleccionadas.value,
     )

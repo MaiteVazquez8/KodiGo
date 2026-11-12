@@ -302,7 +302,6 @@ export async function listarDesafios() {
     tiempoCuestionarioSeg: d.tiempo_cuestionario_seg === null ? null : aNumero(d.tiempo_cuestionario_seg),
     duracionJuegoSeg: aNumero(d.duracion_juego_seg, 180),
     vidasJuego: aNumero(d.vidas_juego, 3),
-    intentosPermitidos: aNumero(d.intentos_permitidos, 1),
     mostrarSoluciones: Boolean(d.mostrar_soluciones),
     congeladoEn: d.congelado_en,
   }))

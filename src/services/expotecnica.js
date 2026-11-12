@@ -58,7 +58,6 @@ export function normalizarEvento(fila) {
       version: aNumero(fila.version, 1),
       cantidadPreguntas: aNumero(fila.cantidad_preguntas, 10),
       puntosPorCorrecta: aNumero(fila.puntos_por_correcta, 100),
-      intentosPermitidos: aNumero(fila.intentos_permitidos, 1),
       tiempoCuestionarioSeg:
         fila.tiempo_cuestionario_seg === null ? null : aNumero(fila.tiempo_cuestionario_seg),
       duracionJuegoSeg: aNumero(fila.duracion_juego_seg, 180),
@@ -156,7 +155,6 @@ export function normalizarEstado(data) {
         : null,
       duracionJuegoSeg: aNumero(configDesafio.duracion_juego_seg, 180),
       vidasJuego: aNumero(configDesafio.vidas_juego, 3),
-      intentosPermitidos: aNumero(configDesafio.intentos_permitidos, 1),
       evento: config.evento ?? {},
       desafio: configDesafio,
     },

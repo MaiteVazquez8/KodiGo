@@ -3655,7 +3655,6 @@ declare
     v_evento record;
     v_desafio record;
     v_participante uuid;
-    v_gastados integer;
     v_partida_abierta uuid;
     v_partida uuid;
     v_cantidad integer;
@@ -3686,8 +3685,7 @@ begin
     end if;
 
     select d.id, d.nombre, d.version, d.cantidad_preguntas, d.puntos_por_correcta,
-           d.tiempo_cuestionario_seg, d.duracion_juego_seg, d.vidas_juego,
-           d.intentos_permitidos
+           d.tiempo_cuestionario_seg, d.duracion_juego_seg, d.vidas_juego
     into v_desafio
     from expotec_desafios d
     where d.evento_id = p_evento_id;
@@ -3712,12 +3710,11 @@ begin
         return v_partida_abierta;
     end if;
 
-    -- 5) Limite de intentos por participante.
-    v_gastados := expotec_intentos_gastados(p_evento_id, v_usuario);
-    if v_gastados >= coalesce(v_desafio.intentos_permitidos, 1) then
-        raise exception 'Ya usaste tus intentos para este evento (% de %).',
-            v_gastados, coalesce(v_desafio.intentos_permitidos, 1);
-    end if;
+    -- 5) Los intentos son ilimitados por participante. El límite por intentos
+    --    se eliminó a pedido de los docentes: cualquier participante puede
+    --    repetir el desafío cuantas veces quiera en el mismo equipo. El alias
+    --    sigue siendo único por evento y el ranking muestra la mejor partida
+    --    por alias, así el participar más no distorsiona la igualdad.
 
     -- 6) Preguntas del desafio, suficientes y con contenido.
     select count(*)::integer into v_cantidad
@@ -3751,8 +3748,7 @@ begin
             'puntos_por_correcta', v_desafio.puntos_por_correcta,
             'tiempo_cuestionario_seg', v_desafio.tiempo_cuestionario_seg,
             'duracion_juego_seg', v_desafio.duracion_juego_seg,
-            'vidas_juego', v_desafio.vidas_juego,
-            'intentos_permitidos', v_desafio.intentos_permitidos
+            'vidas_juego', v_desafio.vidas_juego
         )
     );
 

@@ -73,8 +73,8 @@
             <span class="expo-dato-etiqueta">de juego</span>
           </div>
           <div class="expo-dato">
-            <span class="expo-dato-valor">{{ evento.desafio.intentosPermitidos }}</span>
-            <span class="expo-dato-etiqueta">{{ evento.desafio.intentosPermitidos === 1 ? 'intento' : 'intentos' }}</span>
+            <span class="expo-dato-valor">1</span>
+            <span class="expo-dato-etiqueta">Intento</span>
           </div>
         </section>
 
