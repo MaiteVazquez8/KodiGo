@@ -297,6 +297,14 @@
       </div>
     </template>
 
+    <ActividadRobot
+      v-else-if="tipo === 'robot'"
+      :pregunta="pregunta"
+      :corrigiendo="corrigiendo"
+      :devolucion="devolucion"
+      @programa="robotPrograma = $event?.robot ?? []"
+    />
+
     <transition name="fade">
       <div v-if="devolucion" class="feedback" :class="feedbackClass">
         <q-icon :name="feedbackIcona" size="20px" />
@@ -326,6 +334,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import ActividadRobot from '@/components/ActividadRobot.vue'
 
 const props = defineProps({
   pregunta: {
@@ -368,6 +377,7 @@ const ETIQUETAS_TIPO = {
   salida_codigo: 'Salida de código',
   predecir: 'Predecir resultado',
   bloques: 'Armar con bloques',
+  robot: 'Ruta del robot',
 }
 
 const etiquetaTipo = computed(() => ETIQUETAS_TIPO[tipo.value] ?? 'Actividad')
@@ -608,6 +618,7 @@ const candidatos = computed(() =>
 )
 
 const refsBlancos = ref([])
+const robotPrograma = ref([])
 
 function registrarRefBlanco(el) {
   if (el) refsBlancos.value.push(el)
@@ -629,6 +640,7 @@ watch(
     salidaVista.value = null
     ejecutandoVista.value = false
     bloquesElegidos.value = []
+    robotPrograma.value = []
     ordenElementos.value = mezclarConSemilla(
       opciones.value.map((o) => o.id),
       'orden',
@@ -759,6 +771,9 @@ const hayRespuesta = computed(() => {
   if (tipo.value === 'bloques') {
     return bloquesElegidos.value.length > 0
   }
+  if (tipo.value === 'robot') {
+    return robotPrograma.value.length > 0
+  }
   return false
 })
 
@@ -848,6 +863,9 @@ function cuerpoRespuesta() {
   }
   if (tipo.value === 'bloques') {
     return { bloques: bloquesElegidos.value.map((bloque) => bloque.id) }
+  }
+  if (tipo.value === 'robot') {
+    return { robot: [...robotPrograma.value] }
   }
   return null
 }

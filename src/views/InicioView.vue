@@ -1,10 +1,10 @@
 <template>
   <div class="k-screen">
     <main class="k-container home">
-      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
+      <EstadoPantalla v-if="estadoCarga === 'cargando'" tipo="cargando" />
 
       <EstadoPantalla
-        v-else-if="estado === 'error'"
+        v-else-if="estadoCarga === 'error'"
         tipo="error"
         titulo="No pudimos cargar Kodigo"
         :mensaje="mensajeError"
@@ -90,11 +90,11 @@ import {
   obtenerUnidades,
   rutaLeccion,
 } from '@/services/catalogo'
-import { estado as estadoAuth, usarAuth } from '@/services/auth'
+import { estado as estadoAuth } from '@/services/auth'
 import { obtenerEventoActivo } from '@/services/expotecnica'
 
 const router = useRouter()
-const { estado } = usarAuth()
+
 
 const estadoCarga = ref('cargando')
 const mensajeError = ref('')

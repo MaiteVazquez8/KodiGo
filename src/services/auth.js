@@ -95,6 +95,11 @@ export async function inicializarSesion() {
       if (data.session?.user) {
         await aplicarUsuario(data.session.user)
       }
+    } catch {
+      // Sesion perdida o corrupta (p. ej. token vencido): la app sigue
+      // funcionando en modo publico en lugar de congelar la navegacion.
+      estado.usuario = null
+      estado.perfil = null
     } finally {
       estado.lista = true
     }

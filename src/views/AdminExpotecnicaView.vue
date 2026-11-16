@@ -597,6 +597,30 @@
                   />
                 </template>
 
+                <!-- Ruta del robot -->
+                <template v-if="actividadForm.tipo === 'robot'">
+                  <div class="admin-pareja">
+                    <label class="admin-par">
+                      <span class="admin-lbl">Inicio (0–24)</span>
+                      <input v-model.number="actividadForm.inicio" type="number" min="0" max="24" class="admin-campo" />
+                    </label>
+                    <label class="admin-par">
+                      <span class="admin-lbl">Rumbo (0=↑, 1=→, 2=↓, 3=←)</span>
+                      <input v-model.number="actividadForm.rumbo" type="number" min="0" max="3" class="admin-campo" />
+                    </label>
+                  </div>
+                  <label class="admin-lbl">Meta (0–24)</label>
+                  <input v-model.number="actividadForm.meta" type="number" min="0" max="24" class="admin-campo" />
+                  <label class="admin-lbl">Muros separados por coma (opcional)</label>
+                  <input v-model="actividadForm.muros" type="text" class="admin-campo k-mono" placeholder="ej: 17, 23" />
+                  <label class="admin-lbl">Máximo de instrucciones</label>
+                  <input v-model.number="actividadForm.maxInstrucciones" type="number" min="1" max="30" class="admin-campo" />
+                  <label class="admin-lbl">Objetivo (lo que se le muestra al alumno)</label>
+                  <input v-model="actividadForm.objetivo" type="text" class="admin-campo" placeholder="Llegá a la estrella." />
+                  <label class="admin-lbl">Ejemplo (pista, opcional)</label>
+                  <input v-model="actividadForm.ejemplo" type="text" class="admin-campo" placeholder="Avanzá y girá a la derecha…" />
+                </template>
+
                 <label class="admin-lbl" for="admin-estado-actividad">Estado</label>
                 <select id="admin-estado-actividad" v-model="actividadForm.estado" class="admin-select">
                   <option value="borrador">Guardar como borrador</option>
@@ -785,6 +809,7 @@ const TIPOS_ACTIVIDAD = [
   { valor: 'salida_codigo', nombre: 'Salida de código' },
   { valor: 'predecir', nombre: 'Predecir resultado' },
   { valor: 'bloques', nombre: 'Armar con bloques' },
+  { valor: 'robot', nombre: 'Ruta del robot (laberinto)' },
 ]
 
 const formularioVacio = () => ({
@@ -809,6 +834,13 @@ const formularioVacio = () => ({
   pares: '',
   bloques: '',
   orden: '',
+  inicio: 20,
+  rumbo: 0,
+  meta: 4,
+  muros: '',
+  maxInstrucciones: 30,
+  objetivo: 'Llegá a la estrella.',
+  ejemplo: 'Avanzá y girá a la derecha.',
   estado: 'borrador',
 })
 
@@ -1380,6 +1412,36 @@ function armarActividad() {
       return bloque.id
     })
     datos.bloques = bloques
+  }
+
+  if (tipo === 'robot') {
+    const muros = String(actividadForm.muros ?? '')
+      .split(',')
+      .map((m) => Number.parseInt(m.trim(), 10))
+      .filter((n) => Number.isInteger(n))
+    if (!Number.isInteger(actividadForm.inicio) || actividadForm.inicio < 0 || actividadForm.inicio > 24) {
+      throw new Error('Inicio debe ser un número entre 0 y 24.')
+    }
+    if (!Number.isInteger(actividadForm.meta) || actividadForm.meta < 0 || actividadForm.meta > 24) {
+      throw new Error('Meta debe ser un número entre 0 y 24.')
+    }
+    if (actividadForm.inicio === actividadForm.meta) {
+      throw new Error('El inicio y la meta no pueden ser la misma casilla.')
+    }
+    if (muros.some((m) => m < 0 || m > 24)) {
+      throw new Error('Los muros deben estar entre 0 y 24.')
+    }
+    datos.tablero = {
+      dimensiones: 5,
+      inicio: actividadForm.inicio,
+      rumbo: actividadForm.rumbo % 4,
+      meta: actividadForm.meta,
+      muros,
+    }
+    datos.instrucciones = ['avanzar', 'izquierda', 'derecha', 'repetir']
+    datos.maxInstrucciones = Math.min(30, Math.max(1, Number(actividadForm.maxInstrucciones) || 30))
+    datos.objetivo = actividadForm.objetivo.trim() || 'Llegá a la estrella.'
+    if (actividadForm.ejemplo.trim()) datos.ejemplo = actividadForm.ejemplo.trim()
   }
 
   return { datos, solucion, opciones, indiceCorrecta }
