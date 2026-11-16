@@ -15,6 +15,7 @@
     "cap:sync": "npx cap sync"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.1",
     "@capacitor/cli": "^8.5.1",
     "@capacitor/core": "^8.5.1",
     "@quasar/extras": "^1.16.12",

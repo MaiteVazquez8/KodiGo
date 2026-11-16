@@ -29,9 +29,14 @@ dist-ssr
 # Cloudflare Workers
 dist-worker
 
-# Capacitor generated platforms
-android
-ios
-
-# Capacitor native
-.capacitor
+# Cap-provided native outputs (regenerables con cap sync / cap add android)
+android/build
+android/app/build
+android/app/.gradle
+android/app/local.keys.properties
+ios/build
+ios/Pods
+ios/App/Frameworks
+ios/DerivedData
+ios/assets
+*.jks
