@@ -189,37 +189,13 @@ const TUTORIALES = {
   },
 }
 
+const FLECHAS = ['↑', '→', '↓', '←']
+
+const datos = computed(() => props.pregunta?.datos ?? {})
 const tutorialDatos = computed(() => TUTORIALES[datos.value.tutorial] ?? null)
 const mostrarTutorial = ref(false)
 const tutorialPaso = ref(0)
 
-watch([tutorialDatos, () => props.pregunta?.id], () => {
-  if (!tutorialDatos.value) {
-    mostrarTutorial.value = false
-    return
-  }
-  const clave = `pl-tutorial:${props.pregunta?.id}`
-  let visto = false
-  try { visto = sessionStorage.getItem(clave) === '1' } catch { visto = false }
-  mostrarTutorial.value = !visto
-  tutorialPaso.value = 0
-}, { immediate: true })
-
-function cerrarTutorial() {
-  mostrarTutorial.value = false
-  if (tutorialDatos.value && props.pregunta?.id) {
-    try { sessionStorage.setItem(`pl-tutorial:${props.pregunta.id}`, '1') } catch { /* sin almacenamiento */ }
-  }
-}
-
-function irPasoTutorial(delta) {
-  const total = tutorialDatos.value?.pasos.length ?? 1
-  tutorialPaso.value = (tutorialPaso.value + delta + total) % total
-}
-
-const FLECHAS = ['↑', '→', '↓', '←']
-
-const datos = computed(() => props.pregunta?.datos ?? {})
 const tablero = computed(() => datos.value.tablero ?? {})
 const inicio = computed(() => tablero.value.inicio ?? 20)
 const casaInicial = computed(() => ({ pos: tablero.value.inicio ?? 20, rumbo: tablero.value.rumbo ?? 0 }))
@@ -260,6 +236,30 @@ const claseFeedback = computed(() => {
   if (tipoFeedback.value === 'error') return 'robot-feedback-error'
   return 'robot-feedback-info'
 })
+
+watch([tutorialDatos, () => props.pregunta?.id], () => {
+  if (!tutorialDatos.value) {
+    mostrarTutorial.value = false
+    return
+  }
+  const clave = `pl-tutorial:${props.pregunta?.id}`
+  let visto = false
+  try { visto = sessionStorage.getItem(clave) === '1' } catch { visto = false }
+  mostrarTutorial.value = !visto
+  tutorialPaso.value = 0
+}, { immediate: true })
+
+function cerrarTutorial() {
+  mostrarTutorial.value = false
+  if (tutorialDatos.value && props.pregunta?.id) {
+    try { sessionStorage.setItem(`pl-tutorial:${props.pregunta.id}`, '1') } catch { /* sin almacenamiento */ }
+  }
+}
+
+function irPasoTutorial(delta) {
+  const total = tutorialDatos.value?.pasos.length ?? 1
+  tutorialPaso.value = (tutorialPaso.value + delta + total) % total
+}
 
 function describirCasilla(n) {
   if (casilla.value === n) return 'Robot ' + FLECHAS[rumbo.value]

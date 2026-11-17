@@ -1,5 +1,24 @@
 <template>
   <div class="camino">
+    <!-- Línea que une los niveles de la unidad, con el ritmo zigzag de los nodos. -->
+    <svg
+      v-if="nodos.length > 1"
+      class="camino-conexiones"
+      :viewBox="`0 0 ${ANCHO_SVG} ${altoSvg}`"
+      :width="ANCHO_SVG"
+      :height="altoSvg"
+      preserveAspectRatio="xMidYMid meet"
+      aria-hidden="true"
+    >
+      <path
+        v-for="(segmento, i) in segmentos"
+        :key="i"
+        :d="segmento.d"
+        class="camino-segmento"
+        :class="segmento.clase"
+      />
+    </svg>
+
     <button
       v-for="nodo in nodos"
       :key="nodo.leccion.id"
@@ -22,8 +41,6 @@
         <span v-else>{{ nodo.leccion.orden }}</span>
       </span>
     </button>
-
-    <span class="camino-linea" aria-hidden="true" />
 
     <div v-if="mensaje" class="camino-mensaje">
       <span class="camino-fantasma" aria-hidden="true">o</span>
@@ -51,6 +68,11 @@ const props = defineProps({
 
 defineEmits(['abrir'])
 
+const ANCHO_SVG = 240
+const RADIO_NODO = 29
+const PASO = 88
+const CENTRO = ANCHO_SVG / 2
+
 // Zigzag suave: alterna el desplazamiento lateral de cada nodo (mock), con
 // amplitud amplia cada 4 nodos para mantener el ritmo irregular del camino.
 function desplazamiento(index) {
@@ -64,6 +86,33 @@ const nodos = computed(() =>
 
 const primerDisponible = computed(() =>
   props.lecciones.findIndex((leccion) => leccion.estado === 'disponible'),
+)
+
+const altoSvg = computed(() =>
+  PASO * (props.lecciones.length - 1) + RADIO_NODO * 2,
+)
+
+function yNodo(index) {
+  return RADIO_NODO + index * PASO
+}
+
+const segmentos = computed(() =>
+  props.lecciones.slice(0, -1).map((_, i) => {
+    const x1 = CENTRO + desplazamiento(i)
+    const y1 = yNodo(i)
+    const x2 = CENTRO + desplazamiento(i + 1)
+    const y2 = yNodo(i + 1)
+    const curva = PASO * 0.55
+    const estadoA = props.lecciones[i].estado
+    const estadoB = props.lecciones[i + 1].estado
+    const vistoA = ['completada', 'aprobada'].includes(estadoA)
+    const vistoB = ['completada', 'aprobada'].includes(estadoB)
+    const clase = vistoA && vistoB ? 'is-visto' : vistoA ? 'is-actual' : 'is-pendiente'
+    return {
+      clase,
+      d: `M ${x1} ${y1} C ${x1} ${y1 + curva}, ${x2} ${y2 - curva}, ${x2} ${y2}`,
+    }
+  }),
 )
 
 function clasesNodo(nodo) {
@@ -89,26 +138,47 @@ function etiqueta(nodo) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--k-space-7);
-  padding: var(--k-space-5) 0 var(--k-space-2);
+  gap: 30px;
+  padding: 40px 0 var(--k-space-2);
   margin-top: var(--k-space-5);
 }
 
-/* Linea vertical detras de los nodos */
-.camino-linea {
+/* Línea que conecta los nodos siguiendo el zigzag del camino. */
+.camino-conexiones {
   position: absolute;
-  top: 26px;
-  bottom: 40px;
+  top: 40px;
   left: 50%;
+  width: 240px;
   transform: translateX(-50%);
-  width: 3px;
-  border-radius: 999px;
-  background: rgba(210, 170, 230, 0.16);
+  overflow: visible;
   pointer-events: none;
+}
+
+.camino-segmento {
+  fill: none;
+  stroke-width: 5;
+  stroke-linecap: round;
+  transition: stroke 0.18s ease;
+}
+
+.camino-segmento.is-pendiente {
+  stroke: rgba(210, 170, 230, 0.14);
+  stroke-dasharray: 2 10;
+}
+
+.camino-segmento.is-actual {
+  stroke: rgba(210, 170, 230, 0.3);
+  stroke-dasharray: 6 8;
+}
+
+.camino-segmento.is-visto {
+  stroke: var(--k-accent);
+  filter: drop-shadow(0 0 5px rgba(142, 5, 194, 0.45));
 }
 
 .camino-nodo {
   position: relative;
+  z-index: 1;
   width: 58px;
   height: 58px;
   padding: 0;

@@ -1,10 +1,10 @@
 <template>
   <div class="k-screen">
     <main class="k-container curso">
-      <EstadoPantalla v-if="estado === 'cargando'" tipo="cargando" />
+      <EstadoPantalla v-if="estadoCarga === 'cargando'" tipo="cargando" />
 
       <EstadoPantalla
-        v-else-if="estado === 'error'"
+        v-else-if="estadoCarga === 'error'"
         tipo="error"
         titulo="No pudimos cargar el curso"
         :mensaje="mensajeError"
@@ -13,7 +13,7 @@
       />
 
       <EstadoPantalla
-        v-else-if="estado === 'inexistente'"
+        v-else-if="estadoCarga === 'inexistente'"
         tipo="inexistente"
         titulo="Curso no encontrado"
         mensaje="El curso que buscás no existe o ya no está publicado."
@@ -21,7 +21,7 @@
         @accion="verCursos"
       />
 
-      <template v-else-if="estado === 'listo' && curso">
+      <template v-else-if="estadoCarga === 'listo' && curso">
         <div class="curso-cabecera">
           <button type="button" class="curso-boton-volver" aria-label="Volver" @click="volver">
             <q-icon name="arrow_back" size="20px" />
@@ -111,12 +111,12 @@ import { useRoute, useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import LogoCurso from '@/components/LogoCurso.vue'
 import { aSlug, obtenerUnidades, resolverCurso, rutaUnidad } from '@/services/catalogo'
-import { estado as estadoAuth, usarAuth } from '@/services/auth'
+import { estado as estadoAuth } from '@/services/auth'
 import { obtenerEventoActivo } from '@/services/expotecnica'
 
 const route = useRoute()
 const router = useRouter()
-const { estado } = usarAuth()
+
 
 const estadoCarga = ref('cargando')
 const estadoUnidades = ref('cargando')
