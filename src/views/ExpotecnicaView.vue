@@ -79,10 +79,17 @@
         </section>
 
         <div class="expo-acciones">
-          <button type="button" class="k-btn k-btn--primary k-btn--block k-btn--lg" @click="irDesafio">
-            <q-icon name="sports_esports" size="19px" />
-            Participar del desafío
+          <button
+            type="button"
+            class="k-btn k-btn--primary k-btn--block k-btn--lg"
+            :disabled="entrandoDesafio"
+            @click="irDesafio"
+          >
+            <q-spinner v-if="entrandoDesafio" size="19px" class="on-left" color="currentColor" />
+            <q-icon v-else name="sports_esports" size="19px" class="on-left" />
+            {{ entrandoDesafio ? 'Creando tu sesión de invitado…' : 'Participar del desafío' }}
           </button>
+          <p v-if="errorDesafio" class="expo-error" role="alert">{{ errorDesafio }}</p>
           <router-link class="k-btn k-btn--ghost k-btn--block" :to="linkCursoJavaScript">
             <q-icon name="school" size="18px" />
             Aprender JavaScript
@@ -104,6 +111,7 @@ import EncabezadoApp from '@/components/EncabezadoApp.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import FantasmaKodigo from '@/components/FantasmaKodigo.vue'
 import { obtenerEventoActivo } from '@/services/expotecnica'
+import { asegurarSesion } from '@/services/auth'
 import { aSlug, obtenerCursos } from '@/services/catalogo'
 
 const router = useRouter()
@@ -112,6 +120,8 @@ const estado = ref('cargando')
 const mensajeError = ref('')
 const evento = ref(null)
 const slugJavaScript = ref('')
+const entrandoDesafio = ref(false)
+const errorDesafio = ref('')
 
 const tiempoCuestionarioTexto = computed(() => {
   const t = evento.value?.desafio.tiempoCuestionarioSeg ?? null
@@ -150,8 +160,21 @@ async function cargar() {
 
 onMounted(cargar)
 
-function irDesafio() {
-  router.push('/expotecnica/desafio')
+async function irDesafio() {
+  // Entrar al desafío crea/recupera una sesión anónima si no hay una: la
+  // persona participa igual, como invitado, sin pasar por el login.
+  if (entrandoDesafio.value) return
+  errorDesafio.value = ''
+  entrandoDesafio.value = true
+  try {
+    await asegurarSesion()
+    router.push('/expotecnica/desafio')
+  } catch (error) {
+    errorDesafio.value =
+      (error.message || 'No pudimos iniciar tu sesión para el desafío.') + ' Probá de nuevo.'
+  } finally {
+    entrandoDesafio.value = false
+  }
 }
 
 function volverInicio() {
@@ -229,6 +252,13 @@ function volverInicio() {
 .expo-dato-etiqueta {
   font-size: 11px;
   color: var(--k-text-3);
+}
+
+.expo-error {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--k-error);
 }
 
 .expo-acciones {

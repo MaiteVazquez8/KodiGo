@@ -121,6 +121,28 @@ export async function entrarComoInvitado() {
   return data.session.user
 }
 
+/**
+ * Garantiza una sesión válida para jugar o entrar al desafío: si ya hay una
+ * sesión real o de invitado (vigente) la reutiliza; si no, inicia una anónima.
+ * Evita crear identidades de más cuando la persona ya tiene sesión.
+ */
+export async function asegurarSesion() {
+  try {
+    const { data } = await supabase.auth.getSession()
+    const usuarioActual = data.session?.user ?? null
+    if (usuarioActual) {
+      if (!estado.usuario || estado.usuario.id !== usuarioActual.id) {
+        await aplicarUsuario(usuarioActual)
+      }
+      return usuarioActual
+    }
+  } catch {
+    // Si no se puede consultar la sesión se conserva la que haya en memoria.
+    if (estado.usuario) return estado.usuario
+  }
+  return entrarComoInvitado()
+}
+
 function registrarSuscripcion() {
   if (suscripcionRegistrada) return
   suscripcionRegistrada = true

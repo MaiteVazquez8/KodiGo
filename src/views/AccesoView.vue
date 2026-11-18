@@ -39,7 +39,9 @@
           </div>
         </section>
 
-        <p v-if="errorInvitado" class="acceso-error" role="alert">{{ errorInvitado }}</p>
+        <p v-if="errorInvitado || errorDesafio" class="acceso-error" role="alert">
+          {{ errorInvitado || errorDesafio }}
+        </p>
 
         <div class="acceso-acciones">
           <button
@@ -64,14 +66,18 @@
           <button
             type="button"
             class="acceso-desafio"
+            :disabled="entrandoDesafio"
             @click="irAlDesafio"
           >
             <span class="acceso-desafio-icono">
-              <q-icon name="emoji_events" size="22px" />
+              <q-spinner v-if="entrandoDesafio" size="22px" color="currentColor" />
+              <q-icon v-else name="emoji_events" size="22px" />
             </span>
             <span class="acceso-desafio-texto">
               <span class="acceso-desafio-titulo">Desafío ExpoTécnica</span>
-              <span class="acceso-desafio-sub">Competinos 10 preguntas de JavaScript y Core Defender</span>
+              <span class="acceso-desafio-sub">
+                {{ entrandoDesafio ? 'Creando tu sesión de invitado…' : 'Competinos 10 preguntas de JavaScript y Core Defender' }}
+              </span>
             </span>
             <q-icon name="chevron_right" size="20px" class="acceso-desafio-chev" />
           </button>
@@ -91,13 +97,15 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import FantasmaKodigo from '@/components/FantasmaKodigo.vue'
-import { entrarComoInvitado, esInvitado, usarAuth } from '@/services/auth'
+import { asegurarSesion, entrarComoInvitado, esInvitado, usarAuth } from '@/services/auth'
 
 const router = useRouter()
 const { estado } = usarAuth()
 
 const entrandoInvitado = ref(false)
+const entrandoDesafio = ref(false)
 const errorInvitado = ref('')
+const errorDesafio = ref('')
 
 const invitadoActual = computed(() => esInvitado(estado.usuario))
 const cuentaActiva = computed(() => Boolean(estado.usuario) && !esInvitado(estado.usuario))
@@ -106,8 +114,22 @@ function irAIngreso() {
   router.push(cuentaActiva.value ? '/perfil' : '/acceso/ingreso')
 }
 
-function irAlDesafio() {
-  router.push('/expotecnica')
+async function irAlDesafio() {
+  // Del inicio se entra directo al desafío: si no hay sesión (real o invitado)
+  // se crea/recupera una anónima; la persona participa igual, como invitado.
+  if (entrandoDesafio.value) return
+  errorDesafio.value = ''
+  errorInvitado.value = ''
+  entrandoDesafio.value = true
+  try {
+    await asegurarSesion()
+    router.push('/expotecnica/desafio')
+  } catch (error) {
+    errorDesafio.value =
+      (error.message || 'No pudimos iniciar tu sesión para el desafío.') + ' Probá de nuevo.'
+  } finally {
+    entrandoDesafio.value = false
+  }
 }
 
 async function iniciarSesionInvitado() {
@@ -303,6 +325,11 @@ async function iniciarSesionInvitado() {
 .acceso-desafio:hover {
   border-color: var(--k-accent);
   box-shadow: 0 0 22px rgba(142, 5, 194, 0.28);
+}
+
+.acceso-desafio:disabled {
+  opacity: 0.75;
+  cursor: progress;
 }
 
 .acceso-desafio:active {
