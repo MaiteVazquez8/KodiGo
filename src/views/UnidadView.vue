@@ -22,60 +22,36 @@
       />
 
       <template v-else-if="estadoCarga === 'listo' && unidad">
-        <div class="unit-cabecera">
+        <div class="unit-barra">
           <button type="button" class="unit-boton-volver" aria-label="Volver" @click="volver">
             <q-icon name="arrow_back" size="20px" />
           </button>
-          <h1 class="unit-titulo-cabecera">Unidad {{ unidad.orden }}</h1>
-          <span class="unit-racha">
+          <span class="unit-racha" aria-label="Racha actual">
             <q-icon name="local_fire_department" size="17px" />
             {{ rachaDias }}d
           </span>
         </div>
-        <p class="unit-subtitulo">{{ unidad.descripcion }}</p>
 
-        <section v-if="objetivos.length" class="unit-bloque">
-          <p class="unit-bloque-titulo">Objetivos del aprendizaje</p>
-          <ul class="unit-objetivos">
-            <li v-for="objetivo in objetivos" :key="objetivo">{{ objetivo }}</li>
-          </ul>
-        </section>
-
-        <div v-if="unidad.estado === 'bloqueada'" class="unit-locked-note">
-          <q-icon name="lock" size="18px" />
-          Completá la unidad anterior para desbloquear esta.
-        </div>
-
-        <section class="lessons">
-          <p class="unit-bloque-titulo">Camino de aprendizaje</p>
-
-          <EstadoPantalla
-            v-if="estadoLecciones === 'vacio'"
-            tipo="vacio"
-            titulo="Esta unidad aún no tiene clases"
-            mensaje="Las clases publicadas van a aparecer acá."
-          />
-
-          <CaminoUnidad
-            v-else
-            :lecciones="lecciones"
-            :mensaje="mensajeGuida"
-            @abrir="abrirLeccion"
-          />
-        </section>
-
-        <section class="unit-recompensa">
-          <q-icon name="card_giftcard" size="22px" />
-          <p>
-            Recompensa al finalizar la unidad: ¡Desbloquea el cofre con
-            {{ xpUnidad }} XP extras!
-          </p>
-        </section>
+        <CaminoUnidad
+          v-if="estadoLecciones !== 'vacio'"
+          :lecciones="lecciones"
+          :unidad="unidad"
+          :orden="unidad.orden"
+          :mensaje="mensajeGuida"
+          @abrir="abrirLeccion"
+        />
+        <EstadoPantalla
+          v-else
+          tipo="vacio"
+          titulo="Esta unidad aún no tiene clases"
+          mensaje="Las clases publicadas van a aparecer acá."
+        />
 
         <button
           v-if="primeraDisponible && unidad.estado !== 'bloqueada'"
           type="button"
           class="k-btn k-btn--primary k-btn--block unit-cta"
+          :aria-label="hayCompletadas ? 'Comenzar la próxima clase' : 'Comenzar la primera clase'"
           @click="abrirLeccion(primeraDisponible)"
         >
           {{ hayCompletadas ? 'COMENZAR SIGUIENTE CLASE' : 'COMENZAR PRIMERA CLASE' }}
@@ -110,36 +86,25 @@ const unidad = ref(null)
 const curso = ref(null)
 const lecciones = ref([])
 
-const XP_POR_UNIDAD = 100
-
 const rachaDias = computed(() => estadoAuth.perfil?.racha_dias ?? 0)
-const xpUnidad = computed(() => XP_POR_UNIDAD)
 
 const hayCompletadas = computed(() =>
   lecciones.value.some((l) => ['completada', 'aprobada'].includes(l.estado)),
 )
 
-// El mock lista los objetivos como viñetas; se derivan de las clases de la
-// unidad porque la tabla unidades no tiene columna de objetivos.
-const objetivos = computed(() => lecciones.value.map((leccion) => leccion.titulo).slice(0, 3))
-
 const linkCurso = computed(() =>
   curso.value ? { name: 'curso', params: { curso: aSlug(curso.value.nombre) } } : { name: 'learn' },
 )
 
-// Guia de la mascota al pie del camino: cambia segun el estado del usuario.
 const mensajeGuida = computed(() => {
-  if (unidad.value?.estado === 'bloqueada') {
-    return 'El camino esta en pausa: completá la unidad anterior para seguir avanzando.'
-  }
+  if (unidad.value?.estado === 'bloqueada') return 'El camino está en pausa: completá la unidad anterior para seguir avanzando.'
   const todosVistos =
     lecciones.value.length > 0 &&
-    lecciones.value.every((l) => l.estado === 'completada' || l.estado === 'aprobada')
-
+    lecciones.value.every((l) => ['completada', 'aprobada'].includes(l.estado))
   if (todosVistos) {
     return 'Terminaste el camino de esta unidad: ¡elegí una clase para repasarla cuando quieras!'
   }
-  return 'Sigue avanzando por el camino para desbloquear tu próxima clase.'
+  return 'Seguí el camino: la próxima clase es la tuya.'
 })
 
 const primeraDisponible = computed(
@@ -197,19 +162,19 @@ function verCursos() {
 </script>
 
 <style scoped>
-.unit-cabecera {
+.unit-barra {
   display: flex;
   align-items: center;
-  gap: var(--k-space-3);
+  justify-content: space-between;
+  margin-bottom: var(--k-space-4);
 }
 
 .unit-boton-volver {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
   border-radius: 12px;
   border: 1px solid var(--k-line);
   background: var(--k-surface-2);
@@ -218,24 +183,11 @@ function verCursos() {
   -webkit-tap-highlight-color: transparent;
 }
 
-.unit-titulo-cabecera {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--k-font-brand);
-  font-size: 21px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .unit-racha {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex-shrink: 0;
-  padding: 5px 10px;
+  padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid rgba(142, 5, 194, 0.35);
   font-size: 12px;
@@ -246,93 +198,7 @@ function verCursos() {
   color: var(--k-accent);
 }
 
-.unit-subtitulo {
-  margin-top: var(--k-space-3);
-  font-size: 14px;
-  color: var(--k-text-2);
-}
-
-.unit-bloque {
-  margin-top: var(--k-space-6);
-}
-
-.unit-bloque-titulo {
-  font-size: 17px;
-  font-weight: 800;
-}
-
-.unit-objetivos {
-  display: grid;
-  gap: var(--k-space-2);
-  margin: var(--k-space-3) 0 0;
-  padding: var(--k-space-4) var(--k-space-4) var(--k-space-4) var(--k-space-7);
-  border-radius: var(--k-radius-sm);
-  border: 1px solid var(--k-line);
-  background: var(--k-surface-2);
-}
-
-.unit-objetivos li {
-  font-size: 13.5px;
-  line-height: 1.5;
-  color: var(--k-text-2);
-}
-
-.lesson-xp {
-  color: var(--k-accent);
-  font-weight: 800;
-}
-
-.unit-recompensa {
-  display: flex;
-  align-items: center;
-  gap: var(--k-space-3);
-  margin-top: var(--k-space-5);
-  padding: var(--k-space-4);
-  border-radius: var(--k-radius-sm);
-  border: 1px solid rgba(142, 5, 194, 0.35);
-  background: var(--k-accent-softer);
-}
-
-.unit-recompensa .q-icon {
-  color: var(--k-accent);
-  flex-shrink: 0;
-}
-
-.unit-recompensa p {
-  font-size: 13.5px;
-  line-height: 1.45;
-  color: var(--k-text-2);
-}
-
-.unit-title {
-  margin-top: var(--k-space-2);
-}
-
-.unit-desc {
-  margin-top: var(--k-space-2);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.unit-locked-note {
-  display: flex;
-  align-items: center;
-  gap: var(--k-space-3);
-  margin-top: var(--k-space-4);
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: rgba(142, 5, 194, 0.08);
-  border: 1px solid rgba(142, 5, 194, 0.22);
-  color: var(--k-text-2);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.lessons {
-  margin-top: var(--k-space-6);
-}
-
 .unit-cta {
-  margin-top: var(--k-space-6);
+  margin-top: var(--k-space-5);
 }
 </style>

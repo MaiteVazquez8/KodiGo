@@ -27,18 +27,19 @@
           </div>
         </section>
 
-        <section v-if="esInvitadoActual" class="card-invitado">
+        <section v-if="invitadoActual" class="card-invitado">
           <q-icon name="travel_explore" size="18px" />
           <div>
-            <p class="card-invitado-titulo">Estás entrando como invitado</p>
+            <p class="card-invitado-titulo">Tu sesión de invitado está activa</p>
             <p class="card-invitado-texto">
-              Podés practicar sin crear una cuenta. Si te registrás, esta misma sesión se convierte
-              en tu cuenta y conserva tu progreso.
+              Podés practicar sin crear una cuenta y tu progreso se guarda en este dispositivo.
+              Si te registrás con tu correo, esta misma sesión se convierte en tu cuenta y conserva
+              todo tu avance.
             </p>
           </div>
         </section>
 
-        <p v-if="errorInvitado" class="acceso-error">{{ errorInvitado }}</p>
+        <p v-if="errorInvitado" class="acceso-error" role="alert">{{ errorInvitado }}</p>
 
         <div class="acceso-acciones">
           <button
@@ -49,20 +50,36 @@
             {{ cuentaActiva ? 'VER MI PERFIL' : 'INICIAR SESIÓN' }}
           </button>
 
+          <button
+            type="button"
+            class="k-btn k-btn--ghost k-btn--block k-btn--lg"
+            :disabled="entrandoInvitado"
+            @click="iniciarSesionInvitado"
+          >
+            <q-spinner v-if="entrandoInvitado" size="17px" class="on-left" color="currentColor" />
+            <q-icon v-else name="smartphone" size="19px" class="on-left" />
+            {{ entrandoInvitado ? 'Creando tu sesión…' : invitadoActual ? 'CONTINUAR COMO INVITADO' : 'ENTRAR COMO INVITADO' }}
+          </button>
+
+          <button
+            type="button"
+            class="acceso-desafio"
+            @click="irAlDesafio"
+          >
+            <span class="acceso-desafio-icono">
+              <q-icon name="emoji_events" size="22px" />
+            </span>
+            <span class="acceso-desafio-texto">
+              <span class="acceso-desafio-titulo">Desafío ExpoTécnica</span>
+              <span class="acceso-desafio-sub">Competinos 10 preguntas de JavaScript y Core Defender</span>
+            </span>
+            <q-icon name="chevron_right" size="20px" class="acceso-desafio-chev" />
+          </button>
+
           <p class="acceso-alternativa">
             ¿No tienes cuenta?
             <RouterLink to="/acceso/registro">Regístrate</RouterLink>
           </p>
-
-          <button
-            v-if="!esInvitadoActual"
-            type="button"
-            class="acceso-invitado"
-            :disabled="entrandoInvitado"
-            @click="iniciarSesionInvitado"
-          >
-            {{ entrandoInvitado ? 'Entrando como invitado…' : 'Entrar como invitado' }}
-          </button>
         </div>
       </template>
     </main>
@@ -82,21 +99,31 @@ const { estado } = usarAuth()
 const entrandoInvitado = ref(false)
 const errorInvitado = ref('')
 
-const esInvitadoActual = computed(() => esInvitado(estado.usuario))
+const invitadoActual = computed(() => esInvitado(estado.usuario))
 const cuentaActiva = computed(() => Boolean(estado.usuario) && !esInvitado(estado.usuario))
 
 function irAIngreso() {
   router.push(cuentaActiva.value ? '/perfil' : '/acceso/ingreso')
 }
 
+function irAlDesafio() {
+  router.push('/expotecnica')
+}
+
 async function iniciarSesionInvitado() {
+  // Si ya hay una sesión anónima válida, se reutiliza: no se crea otra.
+  if (invitadoActual.value) {
+    router.push('/learn')
+    return
+  }
   errorInvitado.value = ''
   entrandoInvitado.value = true
   try {
     await entrarComoInvitado()
-    router.push('/perfil')
+    router.push('/learn')
   } catch (error) {
-    errorInvitado.value = error.message
+    errorInvitado.value =
+      (error.message || 'No pudimos crear tu sesión de invitado.') + ' Probá de nuevo.'
   } finally {
     entrandoInvitado.value = false
   }
@@ -104,10 +131,29 @@ async function iniciarSesionInvitado() {
 </script>
 
 <style scoped>
+.card-info,
+.card-invitado,
+.acceso-desafio,
+.acceso-acciones > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
 .acceso {
   display: flex;
   flex-direction: column;
   padding-top: var(--k-space-8);
+  min-width: 0;
+}
+
+.acceso-mensaje > div {
+  min-width: 0;
+}
+
+.acceso-mensaje-texto,
+.card-invitado-texto,
+.card-info-texto {
+  overflow-wrap: anywhere;
 }
 
 .acceso-marca {
@@ -206,34 +252,6 @@ async function iniciarSesionInvitado() {
   color: var(--k-text-2);
 }
 
-/* Entrada como invitado: link de texto, no compite con el botón primario.
-   El mock no la muestra; se ubica debajo del link "Regístrate" para no alterar
-   la jerarquía visual de la pantalla. */
-.acceso-invitado {
-  align-self: center;
-  margin-top: var(--k-space-3);
-  padding: 6px 0;
-  border: 0;
-  background: transparent;
-  color: var(--k-text-3);
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.acceso-invitado:hover:not(:disabled) {
-  color: var(--k-text-2);
-}
-
-.acceso-invitado:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
 .acceso-error {
   margin-top: var(--k-space-4);
   font-size: 13px;
@@ -245,12 +263,13 @@ async function iniciarSesionInvitado() {
 .acceso-acciones {
   display: flex;
   flex-direction: column;
+  gap: 10px;
   margin-top: auto;
   padding-top: var(--k-space-8);
 }
 
 .acceso-alternativa {
-  margin-top: var(--k-space-4);
+  margin-top: var(--k-space-2);
   text-align: center;
   font-size: 14px;
   color: var(--k-text-2);
@@ -260,5 +279,70 @@ async function iniciarSesionInvitado() {
   color: var(--k-accent);
   font-weight: 800;
   text-decoration: none;
+}
+
+/* Botón del desafío ExpoTécnica: opción especial destacada sin robar la jerarquía al login. */
+.acceso-desafio {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-3);
+  width: 100%;
+  margin-top: 2px;
+  padding: 12px 14px;
+  border-radius: var(--k-radius);
+  border: 1px solid rgba(142, 5, 194, 0.45);
+  background: linear-gradient(160deg, #2a0b38 0%, #170722 100%);
+  color: var(--k-text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.acceso-desafio:hover {
+  border-color: var(--k-accent);
+  box-shadow: 0 0 22px rgba(142, 5, 194, 0.28);
+}
+
+.acceso-desafio:active {
+  transform: scale(0.985);
+}
+
+.acceso-desafio-icono {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(142, 5, 194, 0.18);
+  border: 1px solid rgba(142, 5, 194, 0.4);
+  color: var(--k-accent);
+  flex-shrink: 0;
+}
+
+.acceso-desafio-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.acceso-desafio-titulo {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.acceso-desafio-sub {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--k-text-2);
+}
+
+.acceso-desafio-chev {
+  margin-left: auto;
+  color: var(--k-text-2);
+  flex-shrink: 0;
 }
 </style>

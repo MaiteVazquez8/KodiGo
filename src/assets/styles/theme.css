@@ -66,6 +66,8 @@ p {
 
 .k-app {
   min-height: 100vh;
+  max-width: 100%;
+  overflow-x: hidden;
   background:
     radial-gradient(920px 460px at 50% -140px, rgba(112, 11, 151, 0.32), transparent 65%),
     var(--k-bg);
