@@ -340,7 +340,19 @@ let timerAliasId = 0
 
 const letras = ['A', 'B', 'C', 'D', 'E']
 
-const preguntaActual = computed(() => basePartida.value?.preguntas?.[indiceActual.value] ?? null)
+// Número de preguntas que realmente se deben responder: limitado por la
+// configuración del desafío para no mostrar una pregunta de más.
+const totalPreguntas = computed(() =>
+  Math.min(
+    basePartida.value?.config?.cantidadPreguntas ?? 0,
+    basePartida.value?.preguntas?.length ?? 0,
+  ),
+)
+
+const preguntaActual = computed(() => {
+  const idx = Math.max(0, Math.min(indiceActual.value, totalPreguntas.value - 1))
+  return basePartida.value?.preguntas?.[idx] ?? null
+})
 const progresoPct = computed(() => {
   const total = basePartida.value?.config?.cantidadPreguntas || 1
   const respondidas = basePartida.value?.partida?.respondidas ?? 0
@@ -494,7 +506,16 @@ async function interpretarEstado(partidaId) {
       )
       arrancarReservaTimer()
     }
-    indiceActual.value = primerPendiente(data)
+    const siguiente = primerPendiente(data)
+    if (siguiente < 0) {
+      // Todas las preguntas del rango están respondidas pero el servidor
+      // todavía no pasó la partida a cuestionario_completado: verificar.
+      const dataServidor = await estadoPartida(basePartida.value.partida.id)
+      await interpretarEstado(basePartida.value.partida.id)
+      void dataServidor
+      return true
+    }
+    indiceActual.value = siguiente
     estado.value = 'listo'
     return true
   }
@@ -566,8 +587,11 @@ async function revisarVencimiento() {
 }
 
 function primerPendiente(data) {
-  const idx = data.preguntas.findIndex((p) => !data.respuestas[p.asignadaId])
-  return idx >= 0 ? idx : 0
+  const total = totalPreguntas.value
+  const idx = data.preguntas
+    .slice(0, total)
+    .findIndex((p) => !data.respuestas[p.asignadaId])
+  return idx >= 0 ? idx : -1
 }
 
 // ---------------------------------------------------------------------------
@@ -657,7 +681,15 @@ async function elegirOpcion(opcion) {
       return
     }
 
-    indiceActual.value = primerPendiente(basePartida.value)
+    const siguiente = primerPendiente(basePartida.value)
+    if (siguiente < 0) {
+      // No quedan pendientes en el rango: verificar con el servidor si se completó.
+      const data = await estadoPartida(basePartida.value.partida.id)
+      await interpretarEstado(basePartida.value.partida.id)
+      void data
+      return
+    }
+    indiceActual.value = siguiente
     seleccionada.value = null
   } catch (error) {
     if (String(error.message).includes('Se acabó el tiempo')) {

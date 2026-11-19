@@ -144,6 +144,15 @@
                 <button type="button" class="admin-a-btn" :disabled="enviando" @click="abrirDesafio(ev)">
                   Configurar desafío
                 </button>
+                <button
+                  v-if="desafioDe(ev)"
+                  type="button"
+                  class="admin-a-btn admin-peligro"
+                  :disabled="enviando || Boolean(desafioDe(ev).congeladoEn) || ev.estado === 'activo' || ev.estado === 'cerrado'"
+                  @click="eliminarDesafioEvento(ev)"
+                >
+                  Eliminar desafío
+                </button>
                 <button type="button" class="admin-a-btn" :disabled="enviando" @click="entrarEvento(ev)">
                   Administrar ranking
                 </button>
@@ -169,6 +178,15 @@
               <span v-if="eventoDesafio.estado === 'activo'" class="admin-estado es-activo">
                 evento activo
               </span>
+              <button
+                v-if="desafioActual"
+                type="button"
+                class="admin-a-btn admin-peligro"
+                :disabled="enviando || Boolean(desafioCongelado)"
+                @click="eliminarDesafioEvento(eventoDesafio)"
+              >
+                Eliminar desafío
+              </button>
             </div>
 
             <p v-if="desafioCongelado" class="admin-msj">
@@ -958,6 +976,7 @@ import {
   configurarDesafio,
   crearEvento as crearEventoServicio,
   definirSolucion,
+  eliminarDesafio,
   esAdmin,
   estadisticasEvento,
   guardarActividad,
@@ -1138,7 +1157,10 @@ const gruposRanking = computed(() => {
       }
     })
 })
-const grupoActualRanking = computed(() => gruposRanking.value[0]?.numero ?? 1)
+const grupoActualRanking = computed(() => {
+  const evento = eventos.value.find((ev) => ev.id === eventoRankingId.value)
+  return Math.max(evento?.grupoActual ?? 1, gruposRanking.value[0]?.numero ?? 1)
+})
 
 const eventosActivos = computed(() => eventos.value.filter((ev) => ev.estado === 'activo'))
 
@@ -1382,6 +1404,32 @@ async function guardarDesafio() {
     desafios.value = await listarDesafios()
     precargarEdicion(desafioDe(eventoDesafio.value))
     mensaje('Configuración del desafío guardada: el servidor sorteará ' + cantidad + ' preguntas por partida.')
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    enviando.value = false
+  }
+}
+
+async function eliminarDesafioEvento(ev) {
+  if (!ev) return
+  const desafio = desafioDe(ev)
+  if (!desafio) return
+
+  const ok = window.confirm(
+    `¿Eliminar el desafío «${desafio.nombre}» del evento «${ev.nombre}»? Esta acción no se puede deshacer.`,
+  )
+  if (!ok) return
+
+  enviando.value = true
+  try {
+    await eliminarDesafio(ev.id)
+    desafios.value = await listarDesafios()
+    if (eventoDesafio.value?.id === ev.id) {
+      eventoDesafio.value = null
+      seleccionadas.value = []
+    }
+    mensaje(`El desafío «${desafio.nombre}» fue eliminado.`)
   } catch (error) {
     mensaje(error.message, true)
   } finally {
@@ -1889,6 +1937,7 @@ async function reiniciarRankingEvento() {
   enviando.value = true
   try {
     const n = await reiniciarRanking(eventoRankingId.value)
+    eventos.value = await listarEventos()
     await cargarRanking()
     mensaje(
       `Grupo ${grupo} deshabilitado (${n} partida${n === 1 ? '' : 's'}). `

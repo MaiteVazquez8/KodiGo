@@ -52,9 +52,9 @@
         </section>
 
         <p class="ranking-regla">
-          El orden lo calcula el servidor con desempates ordenados: puntaje total, tiempo del
-          cuestionario, puntos de juego y, por último, la fecha de envío. Solo cuentan partidas
-          finalizadas.
+          Se muestran los resultados del grupo vigente. El orden lo calcula el servidor con
+          desempates ordenados: puntaje total, tiempo del cuestionario, puntos de juego y, por
+          último, la fecha de envío. Solo cuentan partidas finalizadas.
         </p>
       </template>
 

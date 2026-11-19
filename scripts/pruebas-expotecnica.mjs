@@ -95,6 +95,7 @@ const RPCS_ADMIN = [
   'expotec_admin_actualizar_evento',
   'expotec_admin_cambiar_estado_evento',
   'expotec_admin_configurar_desafio',
+  'expotec_admin_eliminar_desafio',
   'expotec_admin_estadisticas_evento',
   'expotec_admin_resultados_evento',
   'expotec_admin_cambiar_estado_partida',
@@ -177,7 +178,14 @@ test('SQL: unicidad del alias case-insensitive por evento', () => {
 })
 
 test('SQL: las partidas tienen grupo y estado previo para las tandas del ranking', () => {
+  const eventos = sentenciasPlanas.find((s) => s.includes('create table if not exists expotec_eventos '))
   const tabla = sentenciasPlanas.find((s) => s.includes('create table if not exists expotec_partidas '))
+  assert.ok(eventos, 'falta la tabla de eventos')
+  assert.ok(eventos.includes('grupo_actual integer not null default 1'), 'el evento conserva el grupo vigente')
+  assert.ok(
+    sqlPlano.includes('alter table expotec_eventos add column if not exists grupo_actual'),
+    'la base ya instalada tambien conserva el grupo vigente',
+  )
   assert.ok(tabla, 'falta la tabla de partidas')
   assert.ok(tabla.includes('grupo integer not null default 1'), 'toda partida nace en el grupo 1')
   assert.ok(tabla.includes('estado_anterior varchar(30)'), 'se guarda el estado previo al deshabilitar')
@@ -290,6 +298,7 @@ test('SQL: el ranking respeta el orden y solo por evento', () => {
   assert.ok(cuerpo.includes('puntaje_juego desc'), 'tercero los puntos del juego')
   assert.ok(cuerpo.includes('finalizado_at asc'), 'cuarto la fecha de envio')
   assert.ok(cuerpo.includes('evento_id = p_evento_id'), 'el ranking nunca mezcla eventos')
+  assert.ok(cuerpo.includes('p.grupo = ( select e.grupo_actual'), 'solo lista el grupo vigente')
   assert.ok(cuerpo.includes('expotec_resultados_publicos'), 'solo resultados publicados')
 })
 
@@ -304,6 +313,7 @@ test('SQL: reiniciar el ranking deshabilita lo cerrado y abre la tanda siguiente
     cuerpo.includes("estado in ('creada', 'en_cuestionario', 'cuestionario_completado', 'en_juego')"),
     'los intentos en curso no se cortan',
   )
+  assert.ok(cuerpo.includes('set grupo_actual = v_grupo_siguiente'), 'persiste la siguiente tanda')
   assert.ok(cuerpo.includes('v_grupo_siguiente'), 'van al grupo siguiente')
 })
 
@@ -316,7 +326,8 @@ test('SQL: rehabilitar un grupo devuelve las partidas a su estado original', () 
 
 test('SQL: cada nueva partida entra en el grupo vigente del evento', () => {
   const cuerpo = plano(cuerpoDeFuncion(sql, 'expotec_iniciar_partida'))
-  assert.ok(cuerpo.includes('coalesce(max(grupo), 1)'), 'tras un reinicio se usa la ultima tanda')
+  assert.ok(cuerpo.includes('v_grupo := v_evento.grupo_actual'), 'usa la tanda persistida')
+  assert.ok(cuerpo.includes('for share'), 'el inicio se coordina con un reinicio')
   assert.ok(cuerpo.includes('estado, grupo, config_snapshot'), 'el grupo se persiste al crear')
 })
 
@@ -469,6 +480,15 @@ test('SQL: el desafio configurado queda congelado con la primera partida', () =>
     cuerpo.includes('ya está en juego'),
     'devuelve el mensaje de desafio congelado',
   )
+})
+
+test('SQL: el admin puede eliminar solo desafios que no comenzaron', () => {
+  const cuerpo = plano(cuerpoDeFuncion(sql, 'expotec_admin_eliminar_desafio'))
+
+  assert.match(cuerpo, /perform expotec_guard_admin\(\)/)
+  assert.match(cuerpo, /congelado_en is not null/)
+  assert.match(cuerpo, /exists \(select 1 from expotec_partidas/)
+  assert.match(cuerpo, /delete from expotec_desafios/)
 })
 
 test('SQL: el sorteo del servidor sortea solo la cantidad configurada', () => {

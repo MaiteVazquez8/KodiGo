@@ -310,7 +310,9 @@ export async function listarBancoPreguntas() {
 export async function listarEventos() {
   const { data, error } = await supabase
     .from('expotec_eventos')
-    .select('id, nombre, descripcion, fecha_inicio, fecha_fin, estado, created_at, updated_at')
+    .select(
+      'id, nombre, descripcion, fecha_inicio, fecha_fin, estado, grupo_actual, created_at, updated_at',
+    )
     .order('created_at', { ascending: false })
   if (error) throw errorDe('listarEventos', error)
   return (data ?? []).map(normalizarEventoAdmin)
@@ -324,6 +326,7 @@ export function normalizarEventoAdmin(fila) {
     fechaInicio: fila.fecha_inicio,
     fechaFin: fila.fecha_fin,
     estado: fila.estado,
+    grupoActual: aNumero(fila.grupo_actual, 1),
     createdAt: fila.created_at,
     updatedAt: fila.updated_at,
   }
@@ -438,6 +441,14 @@ export async function configurarDesafio(eventoId, params, preguntas) {
   })
   if (error) throw errorDe('expotec_admin_configurar_desafio', error)
   return data
+}
+
+export async function eliminarDesafio(eventoId) {
+  const { data, error } = await supabase.rpc('expotec_admin_eliminar_desafio', {
+    p_evento_id: eventoId,
+  })
+  if (error) throw errorDe('expotec_admin_eliminar_desafio', error)
+  return Boolean(data)
 }
 
 export async function estadisticasEvento(eventoId) {

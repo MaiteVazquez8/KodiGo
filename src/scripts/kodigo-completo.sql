@@ -1178,8 +1178,6 @@ update intentos
     where mejor_porcentaje > 0 and ultimo_porcentaje = 0;
 end;
 $$;
-
--- ---------------------------------------------------------------------------
 -- Migracion de tipos de actividad
 -- Necesaria en bases donde preguntas / soluciones / respuestas_intento ya
 -- existen. Amplia las actividades de solo multiple_choice a seis tipos:
@@ -2953,6 +2951,7 @@ create table if not exists expotec_eventos (
     fecha_inicio timestamptz,
     fecha_fin timestamptz,
     estado varchar(20) not null default 'borrador',
+    grupo_actual integer not null default 1 check (grupo_actual >= 1),
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     constraint expotec_eventos_estado_check check (estado in ('borrador', 'programado', 'activo', 'cerrado')),
@@ -2960,6 +2959,12 @@ create table if not exists expotec_eventos (
         fecha_inicio is null or fecha_fin is null or fecha_inicio <= fecha_fin
     )
 );
+
+alter table expotec_eventos
+    add column if not exists grupo_actual integer not null default 1;
+alter table expotec_eventos drop constraint if exists expotec_eventos_grupo_actual_check;
+alter table expotec_eventos
+    add constraint expotec_eventos_grupo_actual_check check (grupo_actual >= 1);
 
 create table if not exists expotec_desafios (
     id uuid primary key default gen_random_uuid(),
@@ -3070,6 +3075,11 @@ create index if not exists expotec_partidas_evento_grupo_idx on expotec_partidas
 -- reemplaza porque 'deshabilitada' tambien puede tener finalizado_at.
 alter table expotec_partidas add column if not exists grupo integer not null default 1;
 alter table expotec_partidas add column if not exists estado_anterior varchar(30);
+update expotec_eventos e
+set grupo_actual = greatest(
+    e.grupo_actual,
+    coalesce((select max(p.grupo) from expotec_partidas p where p.evento_id = e.id), 1)
+);
 alter table expotec_partidas drop constraint if exists expotec_partidas_grupo_check;
 alter table expotec_partidas add constraint expotec_partidas_grupo_check check (grupo >= 1);
 alter table expotec_partidas drop constraint if exists expotec_partidas_estado_anterior_check;
@@ -3707,10 +3717,11 @@ begin
         raise exception 'El evento no está activo ahora mismo.';
     end if;
 
-    select e.id, e.nombre
+    select e.id, e.nombre, e.grupo_actual
     into v_evento
     from expotec_eventos e
-    where e.id = p_evento_id;
+    where e.id = p_evento_id
+    for share;
 
     if v_evento.id is null then
         raise exception 'El evento no existe.';
@@ -3775,11 +3786,9 @@ begin
     set congelado_en = coalesce(congelado_en, now())
     where id = v_desafio.id;
 
-    -- 8) Crea la partida con las reglas congeladas en el grupo vigente: tras
-    --    un reinicio, las nuevas partidas entran en la siguiente tanda.
-    select coalesce(max(grupo), 1) into v_grupo
-    from expotec_partidas
-    where evento_id = p_evento_id;
+    -- El grupo se persiste en el evento para que un reinicio avance incluso
+    -- cuando no habia partidas en curso que pudieran marcar la tanda nueva.
+    v_grupo := v_evento.grupo_actual;
 
     v_config := jsonb_build_object(
         'evento', jsonb_build_object('id', v_evento.id, 'nombre', v_evento.nombre),
@@ -4036,7 +4045,11 @@ begin
 
     v_puntos := case
         when v_correcta = p_opcion_id
-        then coalesce((v_partida.config_snapshot -> 'desafio' ->> 'puntos_por_correcta')::integer, 0)
+        then coalesce(
+            (v_partida.config_snapshot -> 'desafio' ->> 'puntos_por_correcta')::integer,
+            (v_partida.config_snapshot -> 'desafío' ->> 'puntos_por_correcta')::integer,
+            0
+        )
         else 0
     end;
 
@@ -4068,7 +4081,10 @@ begin
             where partida_id = v_partida.id
         )
     where id = v_partida.id
-    returning (config_snapshot -> 'desafio' ->> 'cantidad_preguntas')::integer into v_cantidad;
+    returning coalesce(
+        (config_snapshot -> 'desafio' ->> 'cantidad_preguntas')::integer,
+        (config_snapshot -> 'desafío' ->> 'cantidad_preguntas')::integer
+    ) into v_cantidad;
 
     if (select respondidas from expotec_partidas where id = v_partida.id) >= v_cantidad then
         update expotec_partidas
@@ -4107,8 +4123,11 @@ begin
         'ya_registrada', coalesce(p_ya_registrada, false),
         'respondidas', v_partida.respondidas,
         'pendientes', greatest(
-            (v_partida.config_snapshot -> 'desafio' ->> 'cantidad_preguntas')::integer
-              - v_partida.respondidas,
+            coalesce(
+                (v_partida.config_snapshot -> 'desafio' ->> 'cantidad_preguntas')::integer,
+                (v_partida.config_snapshot -> 'desafío' ->> 'cantidad_preguntas')::integer
+            )
+            - v_partida.respondidas,
             0
         ),
         'completado', v_partida.estado in ('cuestionario_completado', 'en_juego', 'finalizada'),
@@ -4151,8 +4170,16 @@ begin
         select * into v_sesion from expotec_sesiones_juego s where s.partida_id = v_partida.id;
         return jsonb_build_object(
             'sesion_id', v_sesion.id,
-            'duracion_max_seg', (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer,
-            'vidas', (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer,
+            'duracion_max_seg', coalesce(
+                (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer,
+                (v_partida.config_snapshot -> 'desafío' ->> 'duracion_juego_seg')::integer,
+                180
+            ),
+            'vidas', coalesce(
+                (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer,
+                (v_partida.config_snapshot -> 'desafío' ->> 'vidas_juego')::integer,
+                3
+            ),
             'reanudada', true
         );
     end if;
@@ -4173,8 +4200,16 @@ begin
 
     return jsonb_build_object(
         'sesion_id', v_sesion.id,
-        'duracion_max_seg', (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer,
-        'vidas', (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer,
+        'duracion_max_seg', coalesce(
+            (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer,
+            (v_partida.config_snapshot -> 'desafío' ->> 'duracion_juego_seg')::integer,
+            180
+        ),
+        'vidas', coalesce(
+            (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer,
+            (v_partida.config_snapshot -> 'desafío' ->> 'vidas_juego')::integer,
+            3
+        ),
         'reanudada', false
     );
 end;
@@ -4303,8 +4338,16 @@ begin
     -- el tiempo real transcurrido desde el arranque de la sesion (con margen
     -- para latencia) ni el limite del desafio.
     v_transcurrido := extract(epoch from (now() - v_sesion.iniciado_at));
-    v_duracion_max := (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer;
-    v_vidas := (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer;
+    v_duracion_max := coalesce(
+        (v_partida.config_snapshot -> 'desafio' ->> 'duracion_juego_seg')::integer,
+        (v_partida.config_snapshot -> 'desafío' ->> 'duracion_juego_seg')::integer,
+        180
+    );
+    v_vidas := coalesce(
+        (v_partida.config_snapshot -> 'desafio' ->> 'vidas_juego')::integer,
+        (v_partida.config_snapshot -> 'desafío' ->> 'vidas_juego')::integer,
+        3
+    );
 
     if p_duracion_seg > v_transcurrido + 2 then
         raise exception 'La duración reportada no coincide con el tiempo real.';
@@ -4649,6 +4692,11 @@ as $$
         join expotec_partidas p on p.id = r.partida_id
         where r.evento_id = p_evento_id
           and p.estado = 'finalizada'
+          and p.grupo = (
+              select e.grupo_actual
+              from expotec_eventos e
+              where e.id = p_evento_id
+          )
     ), mejores as (
         select distinct on (alias_normalizado) *
         from oficiales
@@ -5856,6 +5904,44 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Eliminación de un desafío todavía editable
+-- ---------------------------------------------------------------------------
+
+create or replace function expotec_admin_eliminar_desafio(p_evento_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_desafio record;
+begin
+    perform expotec_guard_admin();
+
+    if p_evento_id is null
+       or not exists (select 1 from expotec_eventos where id = p_evento_id) then
+        raise exception 'El evento no existe.';
+    end if;
+
+    select * into v_desafio
+    from expotec_desafios
+    where evento_id = p_evento_id;
+
+    if v_desafio.id is null then
+        raise exception 'El evento no tiene un desafío que eliminar.';
+    end if;
+
+    if v_desafio.congelado_en is not null
+       or exists (select 1 from expotec_partidas where desafio_id = v_desafio.id) then
+        raise exception 'El desafío ya está en juego y no puede eliminarse.';
+    end if;
+
+    delete from expotec_desafios where id = v_desafio.id;
+    return true;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 8.5 Estadisticas y resultados para el panel
 -- ---------------------------------------------------------------------------
 
@@ -6020,10 +6106,20 @@ begin
         raise exception 'El evento no existe';
     end if;
 
-    select coalesce(max(grupo), 1) into v_grupo_actual
+    select grupo_actual into v_grupo_actual
+    from expotec_eventos
+    where id = p_evento_id
+    for update;
+
+    select greatest(v_grupo_actual, coalesce(max(grupo), 1))
+    into v_grupo_actual
     from expotec_partidas
     where evento_id = p_evento_id;
     v_grupo_siguiente := v_grupo_actual + 1;
+
+    update expotec_eventos
+    set grupo_actual = v_grupo_siguiente
+    where id = p_evento_id;
 
     -- Cerrados: salen del ranking pero conservan grupo y estado previo.
     update expotec_partidas
@@ -6301,6 +6397,8 @@ revoke all on function expotec_admin_actualizar_evento(uuid, jsonb) from public;
 revoke all on function expotec_admin_cambiar_estado_evento(uuid, text) from public;
 
 revoke all on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[]) from public;
+
+revoke all on function expotec_admin_eliminar_desafio(uuid) from public;
 
 revoke all on function expotec_admin_estadisticas_evento(uuid) from public;
 
@@ -8815,6 +8913,7 @@ grant execute on function expotec_admin_actualizar_evento(uuid, jsonb) to authen
 grant execute on function expotec_admin_cambiar_estado_evento(uuid, text) to authenticated;
 grant execute on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[])
     to authenticated;
+grant execute on function expotec_admin_eliminar_desafio(uuid) to authenticated;
 grant execute on function expotec_admin_estadisticas_evento(uuid) to authenticated;
 grant execute on function expotec_admin_resultados_evento(uuid, text, integer)
     to authenticated;
