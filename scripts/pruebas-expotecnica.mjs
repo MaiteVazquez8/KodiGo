@@ -100,6 +100,7 @@ const RPCS_ADMIN = [
   'expotec_admin_cambiar_estado_partida',
   'expotec_admin_reiniciar_ranking',
   'expotec_admin_rehabilitar_ranking',
+  'expotec_admin_rehabilitar_grupo',
   'expotec_admin_renombrar_alias',
   'expotec_admin_renombrar_perfil',
   'expotec_admin_lista_usuarios',
@@ -172,6 +173,21 @@ test('SQL: unicidad del alias case-insensitive por evento', () => {
   assert.ok(
     sqlPlano.includes('unique (evento_id, alias_normalizado)'),
     'el participante debe tener alias unico por evento',
+  )
+})
+
+test('SQL: las partidas tienen grupo y estado previo para las tandas del ranking', () => {
+  const tabla = sentenciasPlanas.find((s) => s.includes('create table if not exists expotec_partidas '))
+  assert.ok(tabla, 'falta la tabla de partidas')
+  assert.ok(tabla.includes('grupo integer not null default 1'), 'toda partida nace en el grupo 1')
+  assert.ok(tabla.includes('estado_anterior varchar(30)'), 'se guarda el estado previo al deshabilitar')
+  assert.ok(
+    sqlPlano.includes('alter table expotec_partidas add column if not exists grupo'),
+    'la base ya instalada tambien se adapta',
+  )
+  assert.ok(
+    sqlPlano.includes("estado in ('finalizada', 'vencida', 'abandonada', 'deshabilitada')"),
+    'una partida deshabilitada puede tener finalizado_at',
   )
 })
 
@@ -275,6 +291,33 @@ test('SQL: el ranking respeta el orden y solo por evento', () => {
   assert.ok(cuerpo.includes('finalizado_at asc'), 'cuarto la fecha de envio')
   assert.ok(cuerpo.includes('evento_id = p_evento_id'), 'el ranking nunca mezcla eventos')
   assert.ok(cuerpo.includes('expotec_resultados_publicos'), 'solo resultados publicados')
+})
+
+test('SQL: reiniciar el ranking deshabilita lo cerrado y abre la tanda siguiente', () => {
+  const cuerpo = plano(cuerpoDeFuncion(sql, 'expotec_admin_reiniciar_ranking'))
+  assert.ok(cuerpo.includes('estado_anterior = estado'), 'guarda el estado para poder rehabilitar')
+  assert.ok(
+    cuerpo.includes("estado in ('finalizada', 'vencida', 'abandonada')"),
+    'se deshabilitan todos los intentos cerrados hasta ese momento',
+  )
+  assert.ok(
+    cuerpo.includes("estado in ('creada', 'en_cuestionario', 'cuestionario_completado', 'en_juego')"),
+    'los intentos en curso no se cortan',
+  )
+  assert.ok(cuerpo.includes('v_grupo_siguiente'), 'van al grupo siguiente')
+})
+
+test('SQL: rehabilitar un grupo devuelve las partidas a su estado original', () => {
+  const cuerpo = plano(cuerpoDeFuncion(sql, 'expotec_admin_rehabilitar_grupo'))
+  assert.ok(cuerpo.includes('expotec_guard_admin'), 'solo administradores')
+  assert.ok(cuerpo.includes('grupo = p_grupo'), 'actua sobre una tanda concreta')
+  assert.ok(cuerpo.includes('coalesce(estado_anterior'), 'no inventa un estado nuevo')
+})
+
+test('SQL: cada nueva partida entra en el grupo vigente del evento', () => {
+  const cuerpo = plano(cuerpoDeFuncion(sql, 'expotec_iniciar_partida'))
+  assert.ok(cuerpo.includes('coalesce(max(grupo), 1)'), 'tras un reinicio se usa la ultima tanda')
+  assert.ok(cuerpo.includes('estado, grupo, config_snapshot'), 'el grupo se persiste al crear')
 })
 
 test('SQL: los puestos del resultado propio usan el mismo desempate', () => {

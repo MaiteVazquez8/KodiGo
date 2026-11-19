@@ -49,6 +49,16 @@ export async function rehabilitarRanking(eventoId) {
   return aNumero(data)
 }
 
+/** Devuelve al ranking todas las partidas deshabilitadas de una tanda. */
+export async function rehabilitarGrupo(eventoId, grupo) {
+  const { data, error } = await supabase.rpc('expotec_admin_rehabilitar_grupo', {
+    p_evento_id: eventoId,
+    p_grupo: grupo,
+  })
+  if (error) throw errorDe('expotec_admin_rehabilitar_grupo', error)
+  return aNumero(data)
+}
+
 export async function renombrarAlias(partidaId, nuevoAlias) {
   const { data, error } = await supabase.rpc('expotec_admin_renombrar_alias', {
     p_partida_id: partidaId,
@@ -449,6 +459,8 @@ export async function resultadosDelEvento(eventoId, estado = null, limite = 200)
     partidaId: f.partida_id,
     alias: f.alias,
     estado: f.estado,
+    grupo: aNumero(f.grupo, 1),
+    estadoAnterior: f.estado_anterior ?? null,
     respondidas: aNumero(f.respondidas),
     correctas: aNumero(f.correctas),
     incorrectas: aNumero(f.incorrectas),

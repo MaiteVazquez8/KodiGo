@@ -1,7 +1,17 @@
 <template>
   <div class="k-screen">
     <EncabezadoApp titulo="Panel ExpoTécnica" back="/learn">
-      <template #default />
+      <template #default>
+        <button
+          type="button"
+          class="admin-cerrar-sesion"
+          :disabled="enviando"
+          @click="cerrarSesionAdmin"
+        >
+          <q-icon name="logout" size="18px" />
+          Cerrar sesión
+        </button>
+      </template>
     </EncabezadoApp>
 
     <main class="k-container admin">
@@ -90,6 +100,26 @@
           </form>
 
           <div class="admin-lista">
+            <h3 class="admin-h3">Eventos activos ({{ eventosActivos.length }})</h3>
+            <p v-if="!eventosActivos.length" class="admin-vacio">
+              No hay eventos activos ahora mismo. Activá uno desde el listado de abajo para administrar su ranking.
+            </p>
+            <div v-for="ev in eventosActivos" :key="`activo-${ev.id}`" class="admin-itemo">
+              <div class="admin-itemo-cab">
+                <strong class="admin-itemo-titulo">{{ ev.nombre }}</strong>
+                <span class="admin-estado es-activo">activo</span>
+              </div>
+              <p class="admin-itemo-fechas">{{ fechasTexto(ev) }}</p>
+              <div class="admin-itemo-acciones">
+                <button type="button" class="k-btn k-btn--primary" :disabled="enviando" @click="entrarEvento(ev)">
+                  Entrar al evento
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="admin-lista">
+            <h3 class="admin-h3">Todos los eventos</h3>
             <div v-for="ev in eventos" :key="ev.id" class="admin-itemo">
               <div class="admin-itemo-cab">
                 <strong class="admin-itemo-titulo">{{ ev.nombre }}</strong>
@@ -113,6 +143,9 @@
                 </button>
                 <button type="button" class="admin-a-btn" :disabled="enviando" @click="abrirDesafio(ev)">
                   Configurar desafío
+                </button>
+                <button type="button" class="admin-a-btn" :disabled="enviando" @click="entrarEvento(ev)">
+                  Administrar ranking
                 </button>
               </div>
             </div>
@@ -737,24 +770,29 @@
             <option v-for="ev in eventos" :key="ev.id" :value="ev.id">{{ ev.nombre }}</option>
           </select>
 
+          <p class="admin-nota">
+            Cada reinicio abre un grupo (tanda) nuevo: los intentos cerrados quedan deshabilitados en
+            su grupo y los que están jugando en ese momento pasan al grupo siguiente.
+          </p>
+
           <div class="admin-ranking-acciones">
             <button
-              v-if="habilitadosRanking.length"
+              v-if="eventoRankingId"
               type="button"
               class="k-btn k-btn--ghost k-btn--block"
               :disabled="enviando"
               @click="reiniciarRankingEvento"
             >
-              Reiniciar ranking (deshabilitar todos)
+              Reiniciar ranking (abrir grupo {{ grupoActualRanking + 1 }})
             </button>
             <button
-              v-if="deshabilitadosRanking.length && !habilitadosRanking.length"
+              v-if="deshabilitadosRanking.length"
               type="button"
               class="k-btn k-btn--primary k-btn--block"
               :disabled="enviando"
               @click="rehabilitarRankingEvento"
             >
-              Rehabilitar todos
+              Rehabilitar todos los grupos
             </button>
             <button
               type="button"
@@ -765,21 +803,41 @@
               Actualizar
             </button>
           </div>
-          <p v-if="!habilitadosRanking.length && !deshabilitadosRanking.length && !rankingCargando" class="admin-nota">
+          <p v-if="!partidasRanking.length && !rankingCargando" class="admin-nota">
             El ranking está vacío: nadie ha disputado el desafío aún para este evento.
           </p>
 
-          <div class="admin-ranking-grupo">
-            <div class="admin-itemo-cab">
-              <h3 class="admin-h3">Habilitados ({{ habilitadosRanking.length }})</h3>
+          <div v-for="grupo in gruposRanking" :key="grupo.numero" class="admin-ranking-grupo">
+            <div class="admin-grupo-cab">
+              <h3 class="admin-h3">Grupo {{ grupo.numero }}</h3>
+              <span class="admin-estado" :class="grupo.estado === 'deshabilitado' ? 'es-deshabilitada' : 'es-finalizada'">
+                {{ etiquetaGrupo(grupo.estado) }}
+              </span>
+              <button
+                v-if="grupo.deshabilitadas"
+                type="button"
+                class="admin-a-btn"
+                :disabled="enviando"
+                @click="rehabilitarGrupoEvento(grupo.numero)"
+              >
+                Rehabilitar grupo
+              </button>
             </div>
-            <p v-if="!habilitadosRanking.length && !rankingCargando" class="admin-vacio">
-              No hay participantes habilitados.
+            <p class="admin-nota">
+              {{ grupo.partidas.length }} partida{{ grupo.partidas.length === 1 ? '' : 's' }}
+              · {{ grupo.deshabilitadas }} deshabilitada{{ grupo.deshabilitadas === 1 ? '' : 's' }}
             </p>
-            <div v-for="(fila, idx) in habilitadosRanking" :key="fila.partidaId" class="admin-itemo">
+            <div
+              v-for="(fila, idx) in grupo.partidas"
+              :key="fila.partidaId"
+              class="admin-itemo"
+              :class="{ 'is-deshabilitada': fila.estado === 'deshabilitada' }"
+            >
               <div class="admin-itemo-cab">
                 <strong class="admin-itemo-titulo">{{ idx + 1 }}. {{ fila.alias }}</strong>
-                <span class="admin-estado es-finalizada">habilitada</span>
+                <span class="admin-estado" :class="fila.estado === 'deshabilitada' ? 'es-deshabilitada' : 'es-finalizada'">
+                  {{ fila.estado === 'deshabilitada' ? 'deshabilitada' : 'habilitada' }}
+                </span>
               </div>
               <p class="admin-itemo-detalle">
                 {{ fila.correctas }} correctas · {{ fila.incorrectas }} incorrectas · {{ fila.puntajeTotal }} pts
@@ -802,6 +860,7 @@
                   Guardar nombre
                 </button>
                 <button
+                  v-if="fila.estado !== 'deshabilitada'"
                   type="button"
                   class="admin-a-btn admin-peligro"
                   :disabled="enviando"
@@ -809,44 +868,8 @@
                 >
                   Quitar del ranking
                 </button>
-              </div>
-              <p v-if="aliasRenovado[fila.partidaId]" class="admin-msj" role="status">Nombre guardado.</p>
-            </div>
-          </div>
-
-          <div class="admin-ranking-grupo">
-            <div class="admin-itemo-cab">
-              <h3 class="admin-h3">Deshabilitados ({{ deshabilitadosRanking.length }})</h3>
-            </div>
-            <p v-if="!deshabilitadosRanking.length && !rankingCargando" class="admin-vacio">
-              No hay participantes deshabilitados.
-            </p>
-            <div v-for="fila in deshabilitadosRanking" :key="fila.partidaId" class="admin-itemo is-deshabilitada">
-              <div class="admin-itemo-cab">
-                <strong class="admin-itemo-titulo">{{ fila.alias }}</strong>
-                <span class="admin-estado es-deshabilitada">deshabilitada</span>
-              </div>
-              <p class="admin-itemo-detalle">
-                {{ fila.correctas }} correctas · {{ fila.incorrectas }} incorrectas · {{ fila.puntajeTotal }} pts
-              </p>
-              <div class="admin-ranking-acciones">
-                <input
-                  v-model="renombrandoAlias[fila.partidaId]"
-                  type="text"
-                  class="admin-campo"
-                  maxlength="40"
-                  :placeholder="fila.alias"
-                  aria-label="Nuevo alias"
-                />
                 <button
-                  type="button"
-                  class="admin-a-btn"
-                  :disabled="enviando || !renombrandoAlias[fila.partidaId]?.trim()"
-                  @click="guardarAlias(fila.partidaId)"
-                >
-                  Guardar nombre
-                </button>
-                <button
+                  v-else
                   type="button"
                   class="admin-a-btn"
                   :disabled="enviando"
@@ -928,6 +951,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import EncabezadoApp from '@/components/EncabezadoApp.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
+import { cerrarSesion } from '@/services/auth'
 import {
   cambiarEstadoContenido,
   cambiarEstadoEvento,
@@ -949,6 +973,7 @@ import {
   listarUsuarios,
   cambiarEstadoPartida,
   reiniciarRanking,
+  rehabilitarGrupo,
   rehabilitarRanking,
   renombrarAlias,
   renombrarPerfil,
@@ -1080,8 +1105,42 @@ const rankingOrdenado = computed(() =>
     b.puntajeJuego - a.puntajeJuego,
   ),
 )
-const habilitadosRanking = computed(() => rankingOrdenado.value.filter((p) => p.estado === 'finalizada'))
 const deshabilitadosRanking = computed(() => rankingOrdenado.value.filter((p) => p.estado === 'deshabilitada'))
+
+// Cada reinicio del ranking abre una tanda nueva: las partidas deshabilitadas
+// quedan en su grupo y las que estan en curso pasan al siguiente.
+const gruposRanking = computed(() => {
+  const porNumero = new Map()
+  for (const fila of partidasRanking.value) {
+    const numero = fila.grupo || 1
+    if (!porNumero.has(numero)) porNumero.set(numero, [])
+    porNumero.get(numero).push(fila)
+  }
+  return [...porNumero.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([numero, partidas]) => {
+      const deshabilitadas = partidas.filter((p) => p.estado === 'deshabilitada').length
+      return {
+        numero,
+        partidas: [...partidas].sort(
+          (a, b) =>
+            b.puntajeTotal - a.puntajeTotal ||
+            Number(a.tiempoCuestionarioSeg ?? Number.MAX_SAFE_INTEGER) -
+              Number(b.tiempoCuestionarioSeg ?? Number.MAX_SAFE_INTEGER),
+        ),
+        deshabilitadas,
+        estado:
+          deshabilitadas === 0
+            ? 'activo'
+            : deshabilitadas === partidas.length
+              ? 'deshabilitado'
+              : 'parcial',
+      }
+    })
+})
+const grupoActualRanking = computed(() => gruposRanking.value[0]?.numero ?? 1)
+
+const eventosActivos = computed(() => eventos.value.filter((ev) => ev.estado === 'activo'))
 
 // Usuarios
 const busquedaUsuarios = ref('')
@@ -1820,16 +1879,37 @@ async function cambiarEstadoRanking(partidaId, deshabilitar) {
 
 async function reiniciarRankingEvento() {
   if (!eventoRankingId.value) return
+  const grupo = grupoActualRanking.value
   const ok = window.confirm(
-    '¿Reiniciar el ranking? Todos los participantes actuales saldrán del ranking de este evento. '
-    + 'Los datos no se borran: podés rehabilitarlos después.',
+    `¿Reiniciar el ranking? Se deshabilitarán todos los intentos cerrados del grupo ${grupo} `
+    + `(y de cualquier grupo rehabilitado). Quienes están jugando ahora pasarán al grupo ${grupo + 1}. `
+    + 'Los datos no se borran: podés rehabilitar los grupos después.',
   )
   if (!ok) return
   enviando.value = true
   try {
     const n = await reiniciarRanking(eventoRankingId.value)
     await cargarRanking()
-    mensaje(`Ranking reseteado: ${n} partida${n === 1 ? '' : 's'} deshabilitada${n === 1 ? '' : 's'}.`)
+    mensaje(
+      `Grupo ${grupo} deshabilitado (${n} partida${n === 1 ? '' : 's'}). `
+      + `Los intentos en curso quedaron en el grupo ${grupo + 1}.`,
+    )
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    enviando.value = false
+  }
+}
+
+async function rehabilitarGrupoEvento(grupo) {
+  if (!eventoRankingId.value) return
+  const ok = window.confirm(`¿Devolver al ranking todas las partidas deshabilitadas del grupo ${grupo}?`)
+  if (!ok) return
+  enviando.value = true
+  try {
+    const n = await rehabilitarGrupo(eventoRankingId.value, grupo)
+    await cargarRanking()
+    mensaje(`Grupo ${grupo} rehabilitado: ${n} partida${n === 1 ? '' : 's'} de vuelta en el ranking.`)
   } catch (error) {
     mensaje(error.message, true)
   } finally {
@@ -1839,7 +1919,7 @@ async function reiniciarRankingEvento() {
 
 async function rehabilitarRankingEvento() {
   if (!eventoRankingId.value) return
-  const ok = window.confirm('¿Devolver a todos los deshabilitados de este evento al ranking?')
+  const ok = window.confirm('¿Devolver al ranking todos los grupos deshabilitados de este evento?')
   if (!ok) return
   enviando.value = true
   try {
@@ -1935,6 +2015,18 @@ function formatoPromedio(valor) {
   return valor === null || valor === undefined || valor === '' ? '—' : String(valor)
 }
 
+function etiquetaGrupo(estado) {
+  if (estado === 'deshabilitado') return 'deshabilitado'
+  if (estado === 'parcial') return 'parcialmente habilitado'
+  return 'activo'
+}
+
+function entrarEvento(ev) {
+  eventoRankingId.value = ev.id
+  eventoReporteId.value = ev.id
+  cambiarTab('ranking')
+}
+
 function cambiarTab(clave) {
   tabActiva.value = clave
   // En pestañas de accion los mensajes viejos ya no aplican.
@@ -1949,6 +2041,18 @@ function cambiarTab(clave) {
 
 function volverInicio() {
   router.push('/learn')
+}
+
+async function cerrarSesionAdmin() {
+  enviando.value = true
+  try {
+    await cerrarSesion()
+    router.push('/')
+  } catch (error) {
+    mensaje(`No se pudo cerrar la sesión: ${error.message}`, true)
+  } finally {
+    enviando.value = false
+  }
 }
 </script>
 
@@ -2263,12 +2367,43 @@ function volverInicio() {
   border-color: var(--k-error);
 }
 
+.admin-cerrar-sesion {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--k-text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.admin-cerrar-sesion:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.admin-cerrar-sesion:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Ranking ExpoTécnica ------------------------------------------------ */
 .admin-ranking-grupo {
   display: flex;
   flex-direction: column;
   gap: var(--k-space-3);
   margin-top: var(--k-space-2);
+}
+
+.admin-grupo-cab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .admin-ranking-acciones {

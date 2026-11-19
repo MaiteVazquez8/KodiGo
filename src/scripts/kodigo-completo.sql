@@ -2937,6 +2937,9 @@ on conflict (pregunta_id) do nothing;
 --     anonima de Supabase de alcance limitado).
 --   * El ranking oficial con sus desempates vive en expotec_ranking() y la
 --     tabla publica minima para tiempo real es expotec_resultados_publicos.
+--   * Cada partida pertenece a un grupo (tanda). Reiniciar el ranking
+--     deshabilita los intentos cerrados y pasa los que estan en curso al
+--     grupo siguiente; rehabilitar un grupo recupera sus partidas sin borrarlas.
 -- ===========================================================================
 
 -- ---------------------------------------------------------------------------
@@ -3012,6 +3015,12 @@ create table if not exists expotec_partidas (
     usuario_id uuid not null references perfiles(id) on delete cascade,
     alias varchar(40) not null,
     estado varchar(30) not null default 'creada',
+    -- Tanda (grupo) a la que pertenece el intento. Al reiniciar el ranking se
+    -- deshabilita el grupo actual y los intentos en curso pasan al siguiente.
+    grupo integer not null default 1,
+    -- Estado previo de una partida deshabilitada: permite devolverla a
+    -- 'finalizada', 'vencida' o 'abandonada' sin inventar un estado nuevo.
+    estado_anterior varchar(30),
     config_snapshot jsonb not null,
     iniciado_at timestamptz not null default now(),
     vencimiento_at timestamptz,
@@ -3034,7 +3043,11 @@ create table if not exists expotec_partidas (
         'deshabilitada'
     )),
     constraint expotec_partidas_cerrada_check check (
-        finalizado_at is null or estado in ('finalizada', 'vencida', 'abandonada')
+        finalizado_at is null or estado in ('finalizada', 'vencida', 'abandonada', 'deshabilitada')
+    ),
+    constraint expotec_partidas_grupo_check check (grupo >= 1),
+    constraint expotec_partidas_estado_anterior_check check (
+        estado_anterior is null or estado_anterior in ('finalizada', 'vencida', 'abandonada')
     ),
     constraint expotec_partidas_conteos_check check (
         correctas >= 0 and incorrectas >= 0 and respondidas >= 0
@@ -3050,6 +3063,21 @@ where estado in ('creada', 'en_cuestionario', 'cuestionario_completado', 'en_jue
 create index if not exists expotec_partidas_evento_idx on expotec_partidas (evento_id);
 create index if not exists expotec_partidas_usuario_idx on expotec_partidas (usuario_id);
 create index if not exists expotec_partidas_estado_idx on expotec_partidas (evento_id, estado);
+create index if not exists expotec_partidas_evento_grupo_idx on expotec_partidas (evento_id, grupo, estado);
+
+-- Adaptacion para bases ya instaladas: las partidas anteriores siguen siendo
+-- del grupo 1 y se guarda el estado previo al deshabilitarlas. El check se
+-- reemplaza porque 'deshabilitada' tambien puede tener finalizado_at.
+alter table expotec_partidas add column if not exists grupo integer not null default 1;
+alter table expotec_partidas add column if not exists estado_anterior varchar(30);
+alter table expotec_partidas drop constraint if exists expotec_partidas_grupo_check;
+alter table expotec_partidas add constraint expotec_partidas_grupo_check check (grupo >= 1);
+alter table expotec_partidas drop constraint if exists expotec_partidas_estado_anterior_check;
+alter table expotec_partidas add constraint expotec_partidas_estado_anterior_check
+    check (estado_anterior is null or estado_anterior in ('finalizada', 'vencida', 'abandonada'));
+alter table expotec_partidas drop constraint if exists expotec_partidas_cerrada_check;
+alter table expotec_partidas add constraint expotec_partidas_cerrada_check
+    check (finalizado_at is null or estado in ('finalizada', 'vencida', 'abandonada', 'deshabilitada'));
 
 create table if not exists expotec_preguntas_asignadas (
     id uuid primary key default gen_random_uuid(),
@@ -3667,6 +3695,7 @@ declare
     v_partida_abierta uuid;
     v_partida uuid;
     v_cantidad integer;
+    v_grupo integer;
     v_config jsonb;
 begin
     if v_usuario is null then
@@ -3746,7 +3775,12 @@ begin
     set congelado_en = coalesce(congelado_en, now())
     where id = v_desafio.id;
 
-    -- 8) Crea la partida con las reglas congeladas.
+    -- 8) Crea la partida con las reglas congeladas en el grupo vigente: tras
+    --    un reinicio, las nuevas partidas entran en la siguiente tanda.
+    select coalesce(max(grupo), 1) into v_grupo
+    from expotec_partidas
+    where evento_id = p_evento_id;
+
     v_config := jsonb_build_object(
         'evento', jsonb_build_object('id', v_evento.id, 'nombre', v_evento.nombre),
         'desafio', jsonb_build_object(
@@ -3763,12 +3797,13 @@ begin
 
     insert into expotec_partidas (
         evento_id, desafio_id, participante_id, usuario_id, alias,
-        estado, config_snapshot, iniciado_at, vencimiento_at
+        estado, grupo, config_snapshot, iniciado_at, vencimiento_at
     )
     values (
         p_evento_id, v_desafio.id, v_participante, v_usuario,
         btrim(p_alias),
         'en_cuestionario',
+        v_grupo,
         v_config,
         now(),
         case
@@ -5883,6 +5918,8 @@ returns table (
     partida_id uuid,
     alias varchar,
     estado varchar,
+    grupo integer,
+    estado_anterior varchar,
     respondidas integer,
     correctas integer,
     incorrectas integer,
@@ -5903,20 +5940,20 @@ as $$
     select expotec_guard_admin();
 
     select
-        p.id, p.alias, p.estado,
+        p.id, p.alias, p.estado, p.grupo, p.estado_anterior,
         p.respondidas, p.correctas, p.incorrectas,
         p.puntaje_cuestionario, p.puntaje_juego, p.puntaje_total,
         p.tiempo_cuestionario_seg, p.iniciado_at, p.finalizado_at
     from expotec_partidas p
     where p.evento_id = p_evento_id
       and (p_estado is null or p.estado = p_estado)
-    order by p.iniciado_at desc
+    order by p.grupo desc, p.iniciado_at desc
     limit least(coalesce(p_limite, 100), 500);
 $$;
 
--- Deshabilita o rehabilita una partida ya finalizada. Solo finalizadas son
--- candidatas a cambiar: una partida en curso no puede colarse al ranking ni
--- saltarse el control de admin. Devuelve el nuevo estado.
+-- Deshabilita o rehabilita una partida ya cerrada. Se guarda el estado previo
+-- para que al devolverla no se convierta en 'finalizada' una partida que antes
+-- era 'vencida' o 'abandonada'. Las partidas en curso no son candidatas.
 create or replace function expotec_admin_cambiar_estado_partida(
     p_partida_id uuid,
     p_deshabilitar boolean
@@ -5928,37 +5965,90 @@ set search_path = public
 as $$
 declare
     v_estado varchar;
+    v_estado_anterior varchar;
+    v_nuevo_estado varchar;
 begin
     perform expotec_guard_admin();
 
-    select estado into v_estado
+    select estado, estado_anterior into v_estado, v_estado_anterior
     from expotec_partidas
     where id = p_partida_id;
 
     if v_estado is null then
         raise exception 'La partida no existe';
     end if;
-    if v_estado in ('finalizada', 'deshabilitada') then
+
+    if p_deshabilitar and v_estado in ('finalizada', 'vencida', 'abandonada') then
+        v_nuevo_estado := 'deshabilitada';
         update expotec_partidas
-        set estado = case
-            when p_deshabilitar then 'deshabilitada'
-            else 'finalizada'
-        end
+        set estado = v_nuevo_estado, estado_anterior = v_estado
         where id = p_partida_id;
-        return case
-            when p_deshabilitar then 'deshabilitada'
-            else 'finalizada'
-        end;
+        return v_nuevo_estado;
     end if;
 
-    raise exception 'Solo se pueden habilitar o deshabilitar partidas ya finalizadas';
+    if not p_deshabilitar and v_estado = 'deshabilitada' then
+        v_nuevo_estado := coalesce(v_estado_anterior, 'finalizada');
+        update expotec_partidas
+        set estado = v_nuevo_estado, estado_anterior = null
+        where id = p_partida_id;
+        return v_nuevo_estado;
+    end if;
+
+    raise exception 'Solo se pueden habilitar o deshabilitar partidas ya cerradas';
 end;
 $$;
 
--- Deshabilita de una sola vez todas las partidas finalizadas del evento. Es
--- la cola de una reiniciada oficial: el ranking vuelve a arrancar vacio sin
--- borrar ningun dato. Devuelve cuantas partidas se deshabilitaron.
+-- Reinicia el ranking por grupos (tandas): deshabilita todos los intentos
+-- cerrados hasta ahora (incluidos los de grupos rehabilitados) y mueve los
+-- intentos en curso al grupo siguiente. Los datos no se borran: al rehabilitar
+-- un grupo sus partidas vuelven a su estado original.
+-- Devuelve cuantas partidas se deshabilitaron.
 create or replace function expotec_admin_reiniciar_ranking(p_evento_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_grupo_actual integer;
+    v_grupo_siguiente integer;
+    v_count integer;
+begin
+    perform expotec_guard_admin();
+
+    if not exists (select 1 from expotec_eventos where id = p_evento_id) then
+        raise exception 'El evento no existe';
+    end if;
+
+    select coalesce(max(grupo), 1) into v_grupo_actual
+    from expotec_partidas
+    where evento_id = p_evento_id;
+    v_grupo_siguiente := v_grupo_actual + 1;
+
+    -- Cerrados: salen del ranking pero conservan grupo y estado previo.
+    update expotec_partidas
+    set estado = 'deshabilitada', estado_anterior = estado
+    where evento_id = p_evento_id
+      and estado in ('finalizada', 'vencida', 'abandonada');
+
+    get diagnostics v_count = row_count;
+
+    -- En curso: pertenecen a la siguiente tanda y siguen jugando sin cortes.
+    update expotec_partidas
+    set grupo = v_grupo_siguiente
+    where evento_id = p_evento_id
+      and estado in ('creada', 'en_cuestionario', 'cuestionario_completado', 'en_juego');
+
+    return v_count;
+end;
+$$;
+
+-- Rehabilita un grupo completo: devuelve sus partidas al ranking con el
+-- estado que tenian antes de deshabilitarlas. Devuelve cuantas se devolvieron.
+create or replace function expotec_admin_rehabilitar_grupo(
+    p_evento_id uuid,
+    p_grupo integer
+)
 returns integer
 language plpgsql
 security definer
@@ -5972,19 +6062,23 @@ begin
     if not exists (select 1 from expotec_eventos where id = p_evento_id) then
         raise exception 'El evento no existe';
     end if;
+    if p_grupo is null or p_grupo < 1 then
+        raise exception 'El grupo no es valido';
+    end if;
 
     update expotec_partidas
-    set estado = 'deshabilitada'
+    set estado = coalesce(estado_anterior, 'finalizada'),
+        estado_anterior = null
     where evento_id = p_evento_id
-      and estado = 'finalizada';
+      and grupo = p_grupo
+      and estado = 'deshabilitada';
 
     get diagnostics v_count = row_count;
     return v_count;
 end;
 $$;
 
--- Rehabilita todas las partidas deshabilitadas del evento. Sirve para cerrar
--- el ciclo tras un reinicio involuntario. Devuelve cuantas se rehabilitarón.
+-- Rehabilita todos los grupos deshabilitados del evento (atajo del panel).
 create or replace function expotec_admin_rehabilitar_ranking(p_evento_id uuid)
 returns integer
 language plpgsql
@@ -6001,7 +6095,8 @@ begin
     end if;
 
     update expotec_partidas
-    set estado = 'finalizada'
+    set estado = coalesce(estado_anterior, 'finalizada'),
+        estado_anterior = null
     where evento_id = p_evento_id
       and estado = 'deshabilitada';
 
@@ -6216,6 +6311,8 @@ revoke all on function expotec_admin_cambiar_estado_partida(uuid, boolean) from 
 revoke all on function expotec_admin_reiniciar_ranking(uuid) from public;
 
 revoke all on function expotec_admin_rehabilitar_ranking(uuid) from public;
+
+revoke all on function expotec_admin_rehabilitar_grupo(uuid, integer) from public;
 
 revoke all on function expotec_admin_renombrar_alias(uuid, text) from public;
 
@@ -8724,6 +8821,7 @@ grant execute on function expotec_admin_resultados_evento(uuid, text, integer)
 grant execute on function expotec_admin_cambiar_estado_partida(uuid, boolean) to authenticated;
 grant execute on function expotec_admin_reiniciar_ranking(uuid) to authenticated;
 grant execute on function expotec_admin_rehabilitar_ranking(uuid) to authenticated;
+grant execute on function expotec_admin_rehabilitar_grupo(uuid, integer) to authenticated;
 grant execute on function expotec_admin_renombrar_alias(uuid, text) to authenticated;
 grant execute on function expotec_admin_renombrar_perfil(uuid, text) to authenticated;
 grant execute on function expotec_admin_lista_usuarios(text, integer) to authenticated;

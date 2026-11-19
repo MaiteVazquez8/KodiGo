@@ -144,23 +144,22 @@ async function cargar() {
     if (!timerRefresco) {
       timerRefresco = setInterval(() => void refrescar(true), INTERVALO_REFRESCO)
     }
-    estado.value = 'listo'
   } catch (error) {
     mensajeError.value = error.message
     estado.value = 'error'
   }
 }
 
-async function refrescar(silencioso = false) {
+async function refrescar() {
   if (!evento.value) return
   try {
     const data = await ranking(evento.value.id, 100)
     filas.value = data
     conectado.value = true
-    if (data.length === 0 && !silencioso) {
-      estado.value = 'vacio'
-      return
-    }
+    // Tras un reinicio el ranking puede quedar vacío y volver a llenarse: el
+    // próximo resultado (Realtime o refresco) debe sacar la pantalla del vacío.
+    estado.value = data.length ? 'listo' : 'vacio'
+    if (!data.length) return
     ultimaActualizacionLos.value = new Date().toISOString()
   } catch (error) {
     if (!filas.value.length) {

@@ -178,6 +178,8 @@ const enrutador = createRouter({
 
 const rutasAcceso = ['bienvenida', 'acceso', 'registro', 'ingreso', 'recuperar', 'restablecer']
 const rutasQueRequierenSesion = ['perfil', 'configuracion', 'expotecnica-desafio', 'admin']
+// Un administrador del panel no usa el menú de la app: va directo al panel.
+const rutasAdminLibres = ['admin', 'expotecnica-desafio', 'expotecnica-ranking', 'expotecnica']
 
 enrutador.beforeEach(async (destino) => {
   // Se espera a conocer el estado real antes de redirigir: sin esto la app
@@ -186,6 +188,12 @@ enrutador.beforeEach(async (destino) => {
 
   const haySesion = Boolean(estado.usuario)
   const esCuenta = haySesion && !esInvitado(estado.usuario)
+  const esAdmin = estado.esAdminExpotec
+
+  // Administrador del panel: siempre al panel (salvo que ya esté en él o en el desafío/ranking).
+  if (esAdmin && !rutasAdminLibres.includes(destino.name)) {
+    return { name: 'admin' }
+  }
 
   // Con una cuenta activa no tiene sentido mostrar las pantallas de acceso.
   if (rutasAcceso.includes(destino.name) && esCuenta) {

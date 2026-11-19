@@ -8,9 +8,11 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { usarAuth } from '@/services/auth'
 import NavegacionInferior from '@/components/NavegacionInferior.vue'
 
 const ruta = useRoute()
+const { esAdminExpotec } = usarAuth()
 
 const rutasSinNavegacion = [
   'bienvenida',
@@ -27,6 +29,9 @@ const rutasSinNavegacion = [
 ]
 
 const mostrarNavegacion = computed(
-  () => ruta.name !== null && !rutasSinNavegacion.includes(ruta.name),
+  () =>
+    ruta.name !== null &&
+    !rutasSinNavegacion.includes(ruta.name) &&
+    !esAdminExpotec.value,
 )
 </script>

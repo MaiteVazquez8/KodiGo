@@ -1,6 +1,7 @@
 import { computed, reactive } from 'vue'
 import { supabase } from '@/supabase'
 import { cargarProgreso } from '@/services/catalogo'
+import { esAdmin as esAdminExpotecRpc } from '@/services/expotecnica-admin'
 
 const URL_RESTABLECER = import.meta.env.VITE_SUPABASE_REDIRECT_URL
 
@@ -10,6 +11,7 @@ export const estado = reactive({
   lista: false,
   usuario: null,
   perfil: null,
+  esAdminExpotec: false,
 })
 
 let promesaInicial = null
@@ -84,6 +86,7 @@ export function usarAuth() {
   return {
     estado,
     esInvitado: computed(() => (estado.usuario ? esInvitado(estado.usuario) : false)),
+    esAdminExpotec: computed(() => estado.esAdminExpotec),
   }
 }
 
@@ -170,6 +173,13 @@ async function aplicarUsuario(usuario) {
   const promesa = (async () => {
     estado.usuario = usuario
     await Promise.all([cargarPerfil(usuario.id), cargarProgreso().catch(() => {})])
+    // Detectar si es administrador del panel de la ExpoTécnica. Nunca falla la
+    // aplicación si la RPC falla: simplemente no es administrador.
+    try {
+      estado.esAdminExpotec = await esAdminExpotecRpc()
+    } catch {
+      estado.esAdminExpotec = false
+    }
     return usuario
   })()
 
