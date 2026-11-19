@@ -280,6 +280,10 @@
             solución. Si algo falta, el servidor te dice exactamente qué.
           </p>
 
+          <p v-if="contenidoCargando" class="admin-vacio" role="status">
+            Cargando catálogo (este panel es grande)…
+          </p>
+          <div v-else-if="!contenidoCargado" class="admin-vacio">Todavía no se cargó el catálogo.</div>
           <div v-for="curso in cursos" :key="curso.id" class="admin-itemo">
             <div class="admin-itemo-cab">
               <strong class="admin-itemo-titulo">{{ curso.nombre }}</strong>
@@ -998,6 +1002,8 @@ const leccionActiva = ref(null)
 const preguntasLeccion = ref([])
 const solucionesPorPregunta = reactive({})
 const nuevaSolucion = reactive({ opcionId: '', explicacion: '' })
+const contenidoCargando = ref(false)
+const contenidoCargado = ref(false)
 
 const TIPOS_ACTIVIDAD = [
   { valor: 'seleccion', nombre: 'Selección múltiple' },
@@ -1133,7 +1139,8 @@ async function cargar() {
 
     eventos.value = await listarEventos()
     desafios.value = await listarDesafios()
-    await cargarArbolContenido()
+    // El árbol de contenido (cursos + unidades + lecciones + preguntas) es pesado
+    // y solo hace falta al entrar a la pestaña Contenido: se carga lazy al cambiar.
     estado.value = 'listo'
   } catch (error) {
     mensajeError.value = error.message
@@ -1165,6 +1172,20 @@ async function cargarArbolContenido() {
   )
   for (const lista of leccionListas) {
     leccionesPorUnidad[lista.unidadId] = lista.lecciones
+  }
+}
+
+async function cargarArbolContenidoSiFalta() {
+  // El árbol de contenido es la parte más pesada: cargar cursos, todas las
+  // unidades y todas las lecciones (hasta cientos de RPC) solo una vez, cuando
+  // la persona entra a la pestaña Contenido.
+  if (contenidoCargado.value) return
+  contenidoCargando.value = true
+  try {
+    await cargarArbolContenido()
+    contenidoCargado.value = true
+  } finally {
+    contenidoCargando.value = false
   }
 }
 
@@ -1921,6 +1942,9 @@ function cambiarTab(clave) {
   hayError.value = false
   if (clave === 'ranking') cargarRanking()
   if (clave === 'usuarios' && !usuariosLista.value.length) cargarUsuarios()
+  // El árbol de contenido (cursos/unidades/lecciones/preguntas) es pesado:
+  // lo cargamos lazy solo al entrar a su pestaña, no en el arranque.
+  if (clave === 'contenido') cargarArbolContenidoSiFalta().catch((error) => mensaje(error.message, true))
 }
 
 function volverInicio() {

@@ -8,7 +8,40 @@
       :class="{ 'is-active': activo === pestana.clave }"
       :aria-label="pestana.etiqueta"
     >
-      <q-icon :name="pestana.icono" size="21px" />
+      <svg
+        viewBox="0 0 24 24"
+        class="nav-icono"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <template v-if="pestana.icono === 'prender'">
+          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+        </template>
+        <template v-else-if="pestana.icono === 'buscar'">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m21 21-4.3-4.3" />
+        </template>
+        <template v-else-if="pestana.icono === 'repaso'">
+          <path d="M23 4v6h-6" />
+          <path d="M1 20v-6h6" />
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          <path d="M3.51 9a9 9 0 0 1 2.13-9.36L1 10" />
+        </template>
+        <template v-else-if="pestana.icono === 'diccionario'">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+        </template>
+        <template v-else-if="pestana.icono === 'mas'">
+          <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+          <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+        </template>
+      </svg>
       <span class="nav-label">{{ pestana.etiqueta }}</span>
     </RouterLink>
   </nav>
@@ -21,11 +54,11 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 
 const pestanas = [
-  { clave: 'learn', etiqueta: 'Learn', icono: 'school', ruta: '/learn' },
-  { clave: 'search', etiqueta: 'Search', icono: 'search', ruta: '/courses' },
-  { clave: 'review', etiqueta: 'Review', icono: 'refresh', ruta: '/review' },
-  { clave: 'dictionary', etiqueta: 'Dictionary', icono: 'menu_book', ruta: '/diccionario' },
-  { clave: 'more', etiqueta: 'More', icono: 'more_horiz', ruta: '/mas' },
+  { clave: 'learn', etiqueta: 'Aprender', icono: 'prender', ruta: '/learn' },
+  { clave: 'search', etiqueta: 'Buscar', icono: 'buscar', ruta: '/courses' },
+  { clave: 'review', etiqueta: 'Repaso', icono: 'repaso', ruta: '/review' },
+  { clave: 'dictionary', etiqueta: 'Diccionario', icono: 'diccionario', ruta: '/diccionario' },
+  { clave: 'more', etiqueta: 'Más', icono: 'mas', ruta: '/mas' },
 ]
 
 const activo = computed(() => {
@@ -88,6 +121,17 @@ const activo = computed(() => {
 .nav-item.is-active {
   color: var(--k-accent);
   background: rgba(142, 5, 194, 0.08);
+}
+
+.nav-icono {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  transition: transform 0.15s ease;
+}
+
+.nav-item.is-active .nav-icono {
+  transform: translateY(-1px);
 }
 
 .nav-label {

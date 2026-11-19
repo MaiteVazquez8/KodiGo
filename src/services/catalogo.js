@@ -18,6 +18,26 @@ const leccionDeIntento = new Map()
 // de la unidad: el desbloqueo es por persona y vive en progreso_unidades.
 const unidadesDesbloqueadas = new Map()
 
+// Cache de promesas por clave con TTL: evita las rafagas de RPC del arranque
+// y de la navegación, sin congelar los datos para siempre. Las derivaciones
+// (estados, progreso) se recalculan siempre desde los datos crudos, para
+// reflejar el progreso recien hidratado.
+const TTL_CATALOGO_MS = 60_000
+const promesasCache = new Map() // clave -> { promesa, expiraEn }
+function promesaCacheada(clave, fn) {
+  const entrada = promesasCache.get(clave)
+  if (entrada && entrada.expiraEn > Date.now()) return entrada.promesa
+  const promesa = fn().catch((err) => {
+    promesasCache.delete(clave)
+    throw err
+  })
+  promesasCache.set(clave, { promesa, expiraEn: Date.now() + TTL_CATALOGO_MS })
+  return promesa
+}
+export function invalidarCatalogo() {
+  promesasCache.clear()
+}
+
 const PREFIJO_CLAVE_INTENTO = 'kodigo.intento.'
 
 export const FRACCION_MINIMA_PARA_APROBAR = 1 / 2
@@ -94,39 +114,50 @@ function mapearProgreso(fila) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Progreso persistente
+// ---------------------------------------------------------------------------
+
+let carreraProgreso = null
+
 /**
  * Descarga el progreso del usuario autenticado y lo deja disponible en
  * memoria. Sin sesion no hay progreso que leer y se limpia la copia local.
+ * Las llamadas concurrentes comparten la misma descarga.
  */
-export async function cargarProgreso() {
-  progresoPorLeccion.clear()
-  resumenPorLeccion.clear()
-  unidadesDesbloqueadas.clear()
+export function cargarProgreso() {
+  if (carreraProgreso) return carreraProgreso
 
-  const { data: sesion } = await supabase.auth.getSession()
-  if (!sesion?.session) return progresoPorLeccion
+  const promesa = (async () => {
+    progresoPorLeccion.clear()
+    resumenPorLeccion.clear()
+    unidadesDesbloqueadas.clear()
 
-  const { data, error } = await supabase.rpc('obtener_progreso')
-  if (error) throw crearError('No se pudo cargar el progreso.', error)
+    const { data: sesion } = await supabase.auth.getSession()
+    if (!sesion?.session) return progresoPorLeccion
 
-  const filas = data ?? []
-  for (const fila of filas) {
-    progresoPorLeccion.set(fila.leccion_id, mapearProgreso(fila))
-  }
+    const { data, error } = await supabase.rpc('obtener_progreso')
+    if (error) throw crearError('No se pudo cargar el progreso.', error)
 
-  try {
-    const { data: habilitadas } = await supabase.rpc('obtener_unidades_desbloqueadas')
-    for (const fila of habilitadas ?? []) {
-      unidadesDesbloqueadas.set(fila.unidad_id, Boolean(fila.completada))
+    const filas = data ?? []
+    for (const fila of filas) {
+      progresoPorLeccion.set(fila.leccion_id, mapearProgreso(fila))
     }
-  } catch {
-    // Si la RPC todavia no esta migrada se cae al estado global de la unidad.
-  }
 
-  // El resumen de la ultima intento aporta los conteos exactos de
-  // correctas e incorrectas, que progreso_lecciones no guarda.
-  const idsIntentos = filas.map((fila) => fila.ultimo_intento_id).filter(Boolean)
-  if (idsIntentos.length) {
+    try {
+      const { data: habilitadas } = await supabase.rpc('obtener_unidades_desbloqueadas')
+      for (const fila of habilitadas ?? []) {
+        unidadesDesbloqueadas.set(fila.unidad_id, Boolean(fila.completada))
+      }
+    } catch {
+      // Si la RPC todavia no esta migrada se cae al estado global de la unidad.
+    }
+
+    // El resumen de la ultima intento aporta los conteos exactos de
+    // correctas e incorrectas, que progreso_lecciones no guarda.
+    const idsIntentos = filas.map((fila) => fila.ultimo_intento_id).filter(Boolean)
+    if (!idsIntentos.length) return progresoPorLeccion
+
     const { data: ultimos, error: errorUltimos } = await supabase
       .from('intentos')
       .select(
@@ -138,9 +169,15 @@ export async function cargarProgreso() {
     for (const fila of ultimos ?? []) {
       resumenPorLeccion.set(fila.leccion_id, mapearResumen(fila))
     }
-  }
 
-  return progresoPorLeccion
+    return progresoPorLeccion
+  })()
+
+  carreraProgreso = promesa
+  promesa.catch(() => {}).finally(() => {
+    if (carreraProgreso === promesa) carreraProgreso = null
+  })
+  return promesa
 }
 
 export function obtenerIntentoLeccion(leccionId) {
@@ -430,28 +467,24 @@ function estadoPorIntento(leccionId) {
 }
 
 export async function obtenerCursos() {
-  const { data, error } = await supabase
-    .from('cursos')
-    .select('*')
-    .eq('estado_publicacion', 'publicado')
-    .order('orden', { ascending: true })
+  return promesaCacheada('cursos', async () => {
+    const { data, error } = await supabase
+      .from('cursos')
+      .select('*')
+      .eq('estado_publicacion', 'publicado')
+      .order('orden', { ascending: true })
 
-  if (error) throw crearError('No se pudieron cargar los cursos.', error)
+    if (error) throw crearError('No se pudieron cargar los cursos.', error)
 
-  return (data ?? []).map(mapearCurso)
+    return (data ?? []).map(mapearCurso)
+  })
 }
 
 export async function obtenerCurso(cursoId) {
-  const { data, error } = await supabase
-    .from('cursos')
-    .select('*')
-    .eq('id', cursoId)
-    .eq('estado_publicacion', 'publicado')
-    .maybeSingle()
-
-  if (error) throw crearError('No se pudo cargar el curso.', error)
-
-  return data ? mapearCurso(data) : null
+  // Deriva del cache compartido de cursos: cada carrera se detiene en el
+  // primer resultado disponible en vez de hacer un RPC por vista.
+  const cursos = await obtenerCursos()
+  return cursos.find((curso) => curso.id === cursoId) ?? null
 }
 
 function calcularProgresoUnidad(idsLecciones) {
@@ -460,28 +493,39 @@ function calcularProgresoUnidad(idsLecciones) {
   return Math.round((aprobadas / idsLecciones.length) * 100)
 }
 
+async function unidadesCrudas(cursoId) {
+  // Filas crudas en cache: los RPC de catalogo son lentos (50-1300 ms) y el
+  // catalogo no cambia durante la sesion. La derivacion por estado se hace
+  // fresca en obtenerUnidades para reflejar progreso recien hidratado.
+  return promesaCacheada(`unidades|${cursoId}`, async () => {
+    const { data: unidades, error } = await supabase
+      .from('unidades')
+      .select('*')
+      .eq('curso_id', cursoId)
+      .order('orden', { ascending: true })
+
+    if (error) throw crearError('No se pudieron cargar las unidades.', error)
+
+    const filasUnidades = unidades ?? []
+    const idsUnidades = filasUnidades.map((unidad) => unidad.id)
+
+    let filasLecciones = []
+    if (idsUnidades.length) {
+      const { data: lecciones, error: errorLecciones } = await supabase
+        .from('lecciones')
+        .select('id, unidad_id, estado_publicacion')
+        .in('unidad_id', idsUnidades)
+
+      if (errorLecciones) throw crearError('No se pudieron cargar las lecciones.', errorLecciones)
+      filasLecciones = lecciones ?? []
+    }
+
+    return { filasUnidades, filasLecciones }
+  })
+}
+
 export async function obtenerUnidades(cursoId) {
-  const { data: unidades, error } = await supabase
-    .from('unidades')
-    .select('*')
-    .eq('curso_id', cursoId)
-    .order('orden', { ascending: true })
-
-  if (error) throw crearError('No se pudieron cargar las unidades.', error)
-
-  const filasUnidades = unidades ?? []
-  const idsUnidades = filasUnidades.map((unidad) => unidad.id)
-
-  let filasLecciones = []
-  if (idsUnidades.length) {
-    const { data: lecciones, error: errorLecciones } = await supabase
-      .from('lecciones')
-      .select('id, unidad_id, estado_publicacion')
-      .in('unidad_id', idsUnidades)
-
-    if (errorLecciones) throw crearError('No se pudieron cargar las lecciones.', errorLecciones)
-    filasLecciones = lecciones ?? []
-  }
+  const { filasUnidades, filasLecciones } = await unidadesCrudas(cursoId)
 
   return filasUnidades.map((unidad) => {
     const leccionesUnidad = filasLecciones.filter((leccion) => leccion.unidad_id === unidad.id)
@@ -530,34 +574,44 @@ export async function obtenerUnidadPorId(unidadId) {
   return mapearUnidad(data, 0, 0, estado)
 }
 
-export async function obtenerLecciones(unidadId) {
-  const { data: lecciones, error } = await supabase
-    .from('lecciones')
-    .select('*')
-    .eq('unidad_id', unidadId)
-    .eq('estado_publicacion', 'publicado')
-    .order('orden', { ascending: true })
-
-  if (error) throw crearError('No se pudieron cargar las lecciones.', error)
-
-  const filas = lecciones ?? []
-  const idsLecciones = filas.map((leccion) => leccion.id)
-
-  let conteoPreguntas = {}
-  if (idsLecciones.length) {
-    const { data: preguntas, error: errorPreguntas } = await supabase
-      .from('preguntas')
-      .select('id, leccion_id')
-      .in('leccion_id', idsLecciones)
+async function leccionesCrudas(unidadId) {
+  // Datos crudos de la unidad en cache; el estado de cada leccion se recalcula
+  // siempre para que "bloqueada/completada" refleje el progreso reciente.
+  return promesaCacheada(`lecciones|${unidadId}`, async () => {
+    const { data: lecciones, error } = await supabase
+      .from('lecciones')
+      .select('*')
+      .eq('unidad_id', unidadId)
       .eq('estado_publicacion', 'publicado')
+      .order('orden', { ascending: true })
 
-    if (errorPreguntas) throw crearError('No se pudieron cargar las preguntas.', errorPreguntas)
+    if (error) throw crearError('No se pudieron cargar las lecciones.', error)
 
-    conteoPreguntas = (preguntas ?? []).reduce((conteo, pregunta) => {
-      conteo[pregunta.leccion_id] = (conteo[pregunta.leccion_id] ?? 0) + 1
-      return conteo
-    }, {})
-  }
+    const filas = lecciones ?? []
+    const idsLecciones = filas.map((leccion) => leccion.id)
+
+    let conteoPreguntas = {}
+    if (idsLecciones.length) {
+      const { data: preguntas, error: errorPreguntas } = await supabase
+        .from('preguntas')
+        .select('id, leccion_id')
+        .in('leccion_id', idsLecciones)
+        .eq('estado_publicacion', 'publicado')
+
+      if (errorPreguntas) throw crearError('No se pudieron cargar las preguntas.', errorPreguntas)
+
+      conteoPreguntas = (preguntas ?? []).reduce((conteo, pregunta) => {
+        conteo[pregunta.leccion_id] = (conteo[pregunta.leccion_id] ?? 0) + 1
+        return conteo
+      }, {})
+    }
+
+    return { filas, conteoPreguntas }
+  })
+}
+
+export async function obtenerLecciones(unidadId) {
+  const { filas, conteoPreguntas } = await leccionesCrudas(unidadId)
 
   return filas.map((fila, index) => {
     const estado = calcularEstadoLeccion(fila, index, filas)
@@ -576,62 +630,69 @@ function calcularEstadoLeccion(fila, index, leccionesDeLaUnidad) {
 }
 
 export async function obtenerLeccion(leccionId) {
-  const { data, error } = await supabase
-    .from('lecciones')
-    .select('*')
-    .eq('id', leccionId)
-    .eq('estado_publicacion', 'publicado')
-    .maybeSingle()
+  const { data, count } = await promesaCacheada(`leccion|${leccionId}`, async () => {
+    const { data: fila, error } = await supabase
+      .from('lecciones')
+      .select('*')
+      .eq('id', leccionId)
+      .eq('estado_publicacion', 'publicado')
+      .maybeSingle()
 
-  if (error) throw crearError('No se pudo cargar la lección.', error)
+    if (error) throw crearError('No se pudo cargar la lección.', error)
+    if (!fila) return { data: null, count: 0 }
+
+    const { count: total, error: errorConteo } = await supabase
+      .from('preguntas')
+      .select('id', { count: 'exact', head: true })
+      .eq('leccion_id', leccionId)
+      .eq('estado_publicacion', 'publicado')
+
+    if (errorConteo) throw crearError('No se pudo contar las preguntas.', errorConteo)
+
+    return { data: fila, count: total ?? 0 }
+  })
 
   if (!data) return null
 
-  const { count, error: errorConteo } = await supabase
-    .from('preguntas')
-    .select('id', { count: 'exact', head: true })
-    .eq('leccion_id', leccionId)
-    .eq('estado_publicacion', 'publicado')
+  cantidadPreguntasPorLeccion.set(leccionId, count)
 
-  if (errorConteo) throw crearError('No se pudo contar las preguntas.', errorConteo)
-
-  cantidadPreguntasPorLeccion.set(leccionId, count ?? 0)
-
-  return mapearLeccion(data, count ?? 0, estadoPorIntento(data.id))
+  return mapearLeccion(data, count, estadoPorIntento(data.id))
 }
 
 export async function obtenerPreguntas(leccionId) {
-  const { data: preguntas, error } = await supabase
-    .from('preguntas')
-    .select('*')
-    .eq('leccion_id', leccionId)
-    .eq('estado_publicacion', 'publicado')
-    .order('orden', { ascending: true })
-
-  if (error) throw crearError('No se pudieron cargar las preguntas.', error)
-
-  const filasPreguntas = preguntas ?? []
-  const idsPreguntas = filasPreguntas.map((pregunta) => pregunta.id)
-
-  let filasOpciones = []
-  if (idsPreguntas.length) {
-    const { data: opciones, error: errorOpciones } = await supabase
-      .from('opciones')
+  return promesaCacheada(`preguntas|${leccionId}`, async () => {
+    const { data: preguntas, error } = await supabase
+      .from('preguntas')
       .select('*')
-      .in('pregunta_id', idsPreguntas)
+      .eq('leccion_id', leccionId)
+      .eq('estado_publicacion', 'publicado')
       .order('orden', { ascending: true })
 
-    if (errorOpciones) throw crearError('No se pudieron cargar las opciones.', errorOpciones)
-    filasOpciones = opciones ?? []
-  }
+    if (error) throw crearError('No se pudieron cargar las preguntas.', error)
 
-  cantidadPreguntasPorLeccion.set(leccionId, filasPreguntas.length)
+    const filasPreguntas = preguntas ?? []
+    const idsPreguntas = filasPreguntas.map((pregunta) => pregunta.id)
 
-  return filasPreguntas.map((pregunta) => {
-    const opciones = filasOpciones
-      .filter((opcion) => opcion.pregunta_id === pregunta.id)
-      .map((opcion) => ({ id: opcion.id, texto: opcion.texto }))
-    return mapearPregunta(pregunta, opciones)
+    let filasOpciones = []
+    if (idsPreguntas.length) {
+      const { data: opciones, error: errorOpciones } = await supabase
+        .from('opciones')
+        .select('*')
+        .in('pregunta_id', idsPreguntas)
+        .order('orden', { ascending: true })
+
+      if (errorOpciones) throw crearError('No se pudieron cargar las opciones.', errorOpciones)
+      filasOpciones = opciones ?? []
+    }
+
+    cantidadPreguntasPorLeccion.set(leccionId, filasPreguntas.length)
+
+    return filasPreguntas.map((pregunta) => {
+      const opciones = filasOpciones
+        .filter((opcion) => opcion.pregunta_id === pregunta.id)
+        .map((opcion) => ({ id: opcion.id, texto: opcion.texto }))
+      return mapearPregunta(pregunta, opciones)
+    })
   })
 }
 

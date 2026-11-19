@@ -158,16 +158,29 @@ function registrarSuscripcion() {
   })
 }
 
+// Dedupe para aplicar el mismo usuario en paralelo (arranque + onAuthStateChange).
+let aplicacionUsuarioActiva = null
+
 async function aplicarUsuario(usuario) {
-  estado.usuario = usuario
-  await cargarPerfil(usuario.id)
-  // El progreso vive en Supabase: se descarga al recuperar la sesion para que
-  // las clases approved, bloqueadas y el perfil reflejen lo real.
+  const id = usuario?.id
+  if (aplicacionUsuarioActiva && aplicacionUsuarioActiva.id === id) {
+    return aplicacionUsuarioActiva.promesa
+  }
+
+  const promesa = (async () => {
+    estado.usuario = usuario
+    await Promise.all([cargarPerfil(usuario.id), cargarProgreso().catch(() => {})])
+    return usuario
+  })()
+
+  const aplicacion = { id, promesa }
+  aplicacionUsuarioActiva = aplicacion
   try {
-    await cargarProgreso()
-  } catch {
-    // Si el progreso no se puede leer, las pantallas muestran el estado
-    // vacio en lugar de romper la navegacion.
+    return await promesa
+  } finally {
+    if (aplicacionUsuarioActiva === aplicacion) {
+      aplicacionUsuarioActiva = null
+    }
   }
 }
 
