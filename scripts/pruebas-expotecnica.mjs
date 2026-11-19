@@ -97,6 +97,12 @@ const RPCS_ADMIN = [
   'expotec_admin_configurar_desafio',
   'expotec_admin_estadisticas_evento',
   'expotec_admin_resultados_evento',
+  'expotec_admin_cambiar_estado_partida',
+  'expotec_admin_reiniciar_ranking',
+  'expotec_admin_rehabilitar_ranking',
+  'expotec_admin_renombrar_alias',
+  'expotec_admin_renombrar_perfil',
+  'expotec_admin_lista_usuarios',
 ]
 
 const HELPERS_INTERNOS = [

@@ -720,6 +720,200 @@
           </div>
           <p v-else-if="stats" class="admin-vacio">Sin partidas registradas para este evento.</p>
         </section>
+
+        <!-- ================================================================= -->
+        <!-- Pestaña RANKING                                                  -->
+        <!-- ================================================================= -->
+        <section v-show="tabActiva === 'ranking'" class="admin-seccion">
+          <h2 class="admin-h2">Ranking del desafío</h2>
+
+          <label class="admin-lbl" for="admin-evento-ranking">Evento</label>
+          <select id="admin-evento-ranking" v-model="eventoRankingId" class="admin-select" @change="cargarRanking">
+            <option value="" disabled>Elegí un evento</option>
+            <option v-for="ev in eventos" :key="ev.id" :value="ev.id">{{ ev.nombre }}</option>
+          </select>
+
+          <div class="admin-ranking-acciones">
+            <button
+              v-if="habilitadosRanking.length"
+              type="button"
+              class="k-btn k-btn--ghost k-btn--block"
+              :disabled="enviando"
+              @click="reiniciarRankingEvento"
+            >
+              Reiniciar ranking (deshabilitar todos)
+            </button>
+            <button
+              v-if="deshabilitadosRanking.length && !habilitadosRanking.length"
+              type="button"
+              class="k-btn k-btn--primary k-btn--block"
+              :disabled="enviando"
+              @click="rehabilitarRankingEvento"
+            >
+              Rehabilitar todos
+            </button>
+            <button
+              type="button"
+              class="k-btn k-btn--ghost k-btn--block"
+              :disabled="rankingCargando"
+              @click="cargarRanking"
+            >
+              Actualizar
+            </button>
+          </div>
+          <p v-if="!habilitadosRanking.length && !deshabilitadosRanking.length && !rankingCargando" class="admin-nota">
+            El ranking está vacío: nadie ha disputado el desafío aún para este evento.
+          </p>
+
+          <div class="admin-ranking-grupo">
+            <div class="admin-itemo-cab">
+              <h3 class="admin-h3">Habilitados ({{ habilitadosRanking.length }})</h3>
+            </div>
+            <p v-if="!habilitadosRanking.length && !rankingCargando" class="admin-vacio">
+              No hay participantes habilitados.
+            </p>
+            <div v-for="(fila, idx) in habilitadosRanking" :key="fila.partidaId" class="admin-itemo">
+              <div class="admin-itemo-cab">
+                <strong class="admin-itemo-titulo">{{ idx + 1 }}. {{ fila.alias }}</strong>
+                <span class="admin-estado es-finalizada">habilitada</span>
+              </div>
+              <p class="admin-itemo-detalle">
+                {{ fila.correctas }} correctas · {{ fila.incorrectas }} incorrectas · {{ fila.puntajeTotal }} pts
+              </p>
+              <div class="admin-ranking-acciones">
+                <input
+                  v-model="renombrandoAlias[fila.partidaId]"
+                  type="text"
+                  class="admin-campo"
+                  maxlength="40"
+                  :placeholder="fila.alias"
+                  aria-label="Nuevo alias"
+                />
+                <button
+                  type="button"
+                  class="admin-a-btn"
+                  :disabled="enviando || !renombrandoAlias[fila.partidaId]?.trim()"
+                  @click="guardarAlias(fila.partidaId)"
+                >
+                  Guardar nombre
+                </button>
+                <button
+                  type="button"
+                  class="admin-a-btn admin-peligro"
+                  :disabled="enviando"
+                  @click="cambiarEstadoRanking(fila.partidaId, true)"
+                >
+                  Quitar del ranking
+                </button>
+              </div>
+              <p v-if="aliasRenovado[fila.partidaId]" class="admin-msj" role="status">Nombre guardado.</p>
+            </div>
+          </div>
+
+          <div class="admin-ranking-grupo">
+            <div class="admin-itemo-cab">
+              <h3 class="admin-h3">Deshabilitados ({{ deshabilitadosRanking.length }})</h3>
+            </div>
+            <p v-if="!deshabilitadosRanking.length && !rankingCargando" class="admin-vacio">
+              No hay participantes deshabilitados.
+            </p>
+            <div v-for="fila in deshabilitadosRanking" :key="fila.partidaId" class="admin-itemo is-deshabilitada">
+              <div class="admin-itemo-cab">
+                <strong class="admin-itemo-titulo">{{ fila.alias }}</strong>
+                <span class="admin-estado es-deshabilitada">deshabilitada</span>
+              </div>
+              <p class="admin-itemo-detalle">
+                {{ fila.correctas }} correctas · {{ fila.incorrectas }} incorrectas · {{ fila.puntajeTotal }} pts
+              </p>
+              <div class="admin-ranking-acciones">
+                <input
+                  v-model="renombrandoAlias[fila.partidaId]"
+                  type="text"
+                  class="admin-campo"
+                  maxlength="40"
+                  :placeholder="fila.alias"
+                  aria-label="Nuevo alias"
+                />
+                <button
+                  type="button"
+                  class="admin-a-btn"
+                  :disabled="enviando || !renombrandoAlias[fila.partidaId]?.trim()"
+                  @click="guardarAlias(fila.partidaId)"
+                >
+                  Guardar nombre
+                </button>
+                <button
+                  type="button"
+                  class="admin-a-btn"
+                  :disabled="enviando"
+                  @click="cambiarEstadoRanking(fila.partidaId, false)"
+                >
+                  Devolver al ranking
+                </button>
+              </div>
+              <p v-if="aliasRenovado[fila.partidaId]" class="admin-msj" role="status">Nombre guardado.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================= -->
+        <!-- Pestaña USUARIOS                                                  -->
+        <!-- ================================================================= -->
+        <section v-show="tabActiva === 'usuarios'" class="admin-seccion">
+          <h2 class="admin-h2">Usuarios</h2>
+          <p class="admin-nota">
+            Moderación de perfiles: podés corregir el nombre visible de cualquier cuenta.
+            Los cambios son definitivos y reversibles desde acá.
+          </p>
+
+          <form class="admin-form" @submit.prevent="cargarUsuarios">
+            <div class="admin-pareja">
+              <input
+                v-model="busquedaUsuarios"
+                type="search"
+                class="admin-campo"
+                placeholder="Buscar por usuario o nombre…"
+                maxlength="80"
+                aria-label="Buscar usuario"
+              />
+              <button type="submit" class="k-btn k-btn--primary" :disabled="usuariosCargando">
+                Buscar
+              </button>
+            </div>
+          </form>
+          <div class="admin-lista">
+            <div v-if="usuariosCargando" class="admin-vacio">Buscando…</div>
+            <p v-else-if="!usuariosLista.length" class="admin-vacio">Sin resultados.</p>
+            <div v-for="u in usuariosLista" :key="u.usuarioId" class="admin-itemo">
+              <div class="admin-itemo-cab">
+                <strong class="admin-itemo-titulo">{{ u.nombreVisible || u.nombreUsuario }}</strong>
+                <span class="admin-estado es-activo">nivel {{ u.nivel }}</span>
+              </div>
+              <p class="admin-itemo-detalle">
+                @{{ u.nombreUsuario }} · {{ u.experiencia }} XP · racha {{ u.rachaDias }} días
+              </p>
+              <div class="admin-ranking-acciones">
+                <input
+                  v-model="renombrandoPerfil[u.usuarioId]"
+                  type="text"
+                  class="admin-campo"
+                  maxlength="60"
+                  :placeholder="u.nombreVisible || u.nombreUsuario"
+                  aria-label="Nuevo nombre visible"
+                />
+                <button
+                  type="button"
+                  class="admin-a-btn"
+                  :disabled="enviando || !renombrandoPerfil[u.usuarioId]?.trim()"
+                  @click="guardarNombrePerfil(u)"
+                >
+                  Guardar nombre
+                </button>
+              </div>
+              <p v-if="perfilRenovado[u.usuarioId]" class="admin-msj" role="status">Nombre guardado.</p>
+            </div>
+          </div>
+        </section>
       </template>
     </main>
   </div>
@@ -748,6 +942,12 @@ import {
   listarPreguntasDelDesafio,
   listarSolucionesDeLeccion,
   listarUnidadesPorCurso,
+  listarUsuarios,
+  cambiarEstadoPartida,
+  reiniciarRanking,
+  rehabilitarRanking,
+  renombrarAlias,
+  renombrarPerfil,
   resultadosDelEvento,
 } from '@/services/expotecnica-admin'
 
@@ -765,6 +965,8 @@ const tabs = [
   { clave: 'desafio', nombre: 'Desafío' },
   { clave: 'contenido', nombre: 'Contenido' },
   { clave: 'resultados', nombre: 'Resultados' },
+  { clave: 'ranking', nombre: 'Ranking' },
+  { clave: 'usuarios', nombre: 'Usuarios' },
 ]
 
 // Eventos y desafíos
@@ -858,6 +1060,29 @@ const tipoConOpciones = computed(() => {
 const eventoReporteId = ref('')
 const stats = ref(null)
 const partidas = ref([])
+
+// Ranking del desafío
+const eventoRankingId = ref('')
+const partidasRanking = ref([])
+const rankingCargando = ref(false)
+const renombrandoAlias = reactive({}) // partidaId -> input value
+const aliasRenovado = reactive({}) // partidaId -> éxito inline
+const rankingOrdenado = computed(() =>
+  [...partidasRanking.value].sort((a, b) =>
+    b.puntajeTotal - a.puntajeTotal ||
+    (Number(a.tiempoCuestionarioSeg ?? Number.MAX_SAFE_INTEGER) - Number(b.tiempoCuestionarioSeg ?? Number.MAX_SAFE_INTEGER)) ||
+    b.puntajeJuego - a.puntajeJuego,
+  ),
+)
+const habilitadosRanking = computed(() => rankingOrdenado.value.filter((p) => p.estado === 'finalizada'))
+const deshabilitadosRanking = computed(() => rankingOrdenado.value.filter((p) => p.estado === 'deshabilitada'))
+
+// Usuarios
+const busquedaUsuarios = ref('')
+const usuariosLista = ref([])
+const usuariosCargando = ref(false)
+const renombrandoPerfil = reactive({}) // usuarioId -> input value
+const perfilRenovado = reactive({}) // usuarioId -> éxito inline
 
 const desafioActual = computed(() =>
   eventoDesafio.value
@@ -1539,6 +1764,125 @@ function estadosTexto(porEstado) {
 }
 
 // ---------------------------------------------------------------------------
+// Ranking del desafío
+// ---------------------------------------------------------------------------
+
+async function cargarRanking() {
+  if (!eventoRankingId.value) {
+    partidasRanking.value = []
+    return
+  }
+  rankingCargando.value = true
+  enviando.value = true
+  try {
+    partidasRanking.value = await resultadosDelEvento(eventoRankingId.value, null, 500)
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    rankingCargando.value = false
+    enviando.value = false
+  }
+}
+
+async function cambiarEstadoRanking(partidaId, deshabilitar) {
+  enviando.value = true
+  try {
+    await cambiarEstadoPartida(partidaId, deshabilitar)
+    await cargarRanking()
+    mensaje(deshabilitar ? 'Participante quitado del ranking.' : 'Participante devuelto al ranking.')
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    enviando.value = false
+  }
+}
+
+async function reiniciarRankingEvento() {
+  if (!eventoRankingId.value) return
+  const ok = window.confirm(
+    '¿Reiniciar el ranking? Todos los participantes actuales saldrán del ranking de este evento. '
+    + 'Los datos no se borran: podés rehabilitarlos después.',
+  )
+  if (!ok) return
+  enviando.value = true
+  try {
+    const n = await reiniciarRanking(eventoRankingId.value)
+    await cargarRanking()
+    mensaje(`Ranking reseteado: ${n} partida${n === 1 ? '' : 's'} deshabilitada${n === 1 ? '' : 's'}.`)
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    enviando.value = false
+  }
+}
+
+async function rehabilitarRankingEvento() {
+  if (!eventoRankingId.value) return
+  const ok = window.confirm('¿Devolver a todos los deshabilitados de este evento al ranking?')
+  if (!ok) return
+  enviando.value = true
+  try {
+    const n = await rehabilitarRanking(eventoRankingId.value)
+    await cargarRanking()
+    mensaje(`${n} partida${n === 1 ? '' : 's'} de vuelta en el ranking.`)
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    enviando.value = false
+  }
+}
+
+async function guardarAlias(partidaId) {
+  const alias = String(renombrandoAlias[partidaId] ?? '').trim()
+  if (!alias) return
+  enviando.value = true
+  try {
+    await renombrarAlias(partidaId, alias)
+    delete renombrandoAlias[partidaId]
+    aliasRenovado[partidaId] = true
+    await cargarRanking()
+    window.setTimeout(() => { delete aliasRenovado[partidaId] }, 1800)
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    enviando.value = false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Usuarios
+// ---------------------------------------------------------------------------
+
+async function cargarUsuarios() {
+  usuariosCargando.value = true
+  try {
+    usuariosLista.value = await listarUsuarios(busquedaUsuarios.value, 100)
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    usuariosCargando.value = false
+  }
+}
+
+async function guardarNombrePerfil(u) {
+  const nombre = String(renombrandoPerfil[u.usuarioId] ?? '').trim()
+  if (!nombre) return
+  enviando.value = true
+  try {
+    await renombrarPerfil(u.usuarioId, nombre)
+    const idx = usuariosLista.value.findIndex((x) => x.usuarioId === u.usuarioId)
+    if (idx !== -1) usuariosLista.value[idx] = { ...usuariosLista.value[idx], nombreVisible: nombre }
+    delete renombrandoPerfil[u.usuarioId]
+    perfilRenovado[u.usuarioId] = true
+    window.setTimeout(() => { delete perfilRenovado[u.usuarioId] }, 1800)
+  } catch (error) {
+    mensaje(error.message, true)
+  } finally {
+    enviando.value = false
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Formato y utilidades
 // ---------------------------------------------------------------------------
 
@@ -1575,6 +1919,8 @@ function cambiarTab(clave) {
   // En pestañas de accion los mensajes viejos ya no aplican.
   mensajeAcciones.value = ''
   hayError.value = false
+  if (clave === 'ranking') cargarRanking()
+  if (clave === 'usuarios' && !usuariosLista.value.length) cargarUsuarios()
 }
 
 function volverInicio() {
@@ -1593,7 +1939,7 @@ function volverInicio() {
 /* Tabs ------------------------------------------------------------ */
 .admin-tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 6px;
   background: var(--k-surface);
   border: 1px solid var(--k-line);
@@ -1882,6 +2228,45 @@ function volverInicio() {
 .admin-paso {
   border-color: var(--k-accent);
   color: var(--k-accent);
+}
+
+.admin-peligro {
+  border-color: rgba(255, 93, 115, 0.5);
+  color: var(--k-error);
+}
+
+.admin-peligro:hover {
+  border-color: var(--k-error);
+}
+
+/* Ranking ExpoTécnica ------------------------------------------------ */
+.admin-ranking-grupo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-3);
+  margin-top: var(--k-space-2);
+}
+
+.admin-ranking-acciones {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.admin-ranking-acciones .admin-campo {
+  max-width: 220px;
+}
+
+.admin-itemo.is-deshabilitada {
+  opacity: 0.65;
+  border-style: dashed;
+}
+
+.es-deshabilitada {
+  background: rgba(255, 93, 115, 0.14);
+  color: var(--k-error);
+  border-color: transparent;
 }
 
 .admin-prefill {

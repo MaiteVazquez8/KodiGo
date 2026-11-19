@@ -3027,7 +3027,11 @@ create table if not exists expotec_partidas (
     created_at timestamptz not null default now(),
     constraint expotec_partidas_estado_check check (estado in (
         'creada', 'en_cuestionario', 'cuestionario_completado',
-        'en_juego', 'finalizada', 'vencida', 'abandonada'
+        'en_juego', 'finalizada', 'vencida', 'abandonada',
+        -- Un administrador puede deshabilitar una partida para sacar a un
+        -- participante del ranking sin borrar sus datos: el estado vuelve
+        -- a 'finalizada' al rehabilitar.
+        'deshabilitada'
     )),
     constraint expotec_partidas_cerrada_check check (
         finalizado_at is null or estado in ('finalizada', 'vencida', 'abandonada')
@@ -4605,9 +4609,11 @@ security definer
 set search_path = public
 as $$
     with oficiales as (
-        select *
+        select r.*
         from expotec_resultados_publicos r
+        join expotec_partidas p on p.id = r.partida_id
         where r.evento_id = p_evento_id
+          and p.estado = 'finalizada'
     ), mejores as (
         select distinct on (alias_normalizado) *
         from oficiales
@@ -5908,6 +5914,236 @@ as $$
     limit least(coalesce(p_limite, 100), 500);
 $$;
 
+-- Deshabilita o rehabilita una partida ya finalizada. Solo finalizadas son
+-- candidatas a cambiar: una partida en curso no puede colarse al ranking ni
+-- saltarse el control de admin. Devuelve el nuevo estado.
+create or replace function expotec_admin_cambiar_estado_partida(
+    p_partida_id uuid,
+    p_deshabilitar boolean
+)
+returns varchar
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_estado varchar;
+begin
+    perform expotec_guard_admin();
+
+    select estado into v_estado
+    from expotec_partidas
+    where id = p_partida_id;
+
+    if v_estado is null then
+        raise exception 'La partida no existe';
+    end if;
+    if v_estado in ('finalizada', 'deshabilitada') then
+        update expotec_partidas
+        set estado = case
+            when p_deshabilitar then 'deshabilitada'
+            else 'finalizada'
+        end
+        where id = p_partida_id;
+        return case
+            when p_deshabilitar then 'deshabilitada'
+            else 'finalizada'
+        end;
+    end if;
+
+    raise exception 'Solo se pueden habilitar o deshabilitar partidas ya finalizadas';
+end;
+$$;
+
+-- Deshabilita de una sola vez todas las partidas finalizadas del evento. Es
+-- la cola de una reiniciada oficial: el ranking vuelve a arrancar vacio sin
+-- borrar ningun dato. Devuelve cuantas partidas se deshabilitaron.
+create or replace function expotec_admin_reiniciar_ranking(p_evento_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_count integer;
+begin
+    perform expotec_guard_admin();
+
+    if not exists (select 1 from expotec_eventos where id = p_evento_id) then
+        raise exception 'El evento no existe';
+    end if;
+
+    update expotec_partidas
+    set estado = 'deshabilitada'
+    where evento_id = p_evento_id
+      and estado = 'finalizada';
+
+    get diagnostics v_count = row_count;
+    return v_count;
+end;
+$$;
+
+-- Rehabilita todas las partidas deshabilitadas del evento. Sirve para cerrar
+-- el ciclo tras un reinicio involuntario. Devuelve cuantas se rehabilitarón.
+create or replace function expotec_admin_rehabilitar_ranking(p_evento_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_count integer;
+begin
+    perform expotec_guard_admin();
+
+    if not exists (select 1 from expotec_eventos where id = p_evento_id) then
+        raise exception 'El evento no existe';
+    end if;
+
+    update expotec_partidas
+    set estado = 'finalizada'
+    where evento_id = p_evento_id
+      and estado = 'deshabilitada';
+
+    get diagnostics v_count = row_count;
+    return v_count;
+end;
+$$;
+
+-- Cambia el alias de una partida (aplicable a habilitadas y deshabilitadas).
+-- Valida reglas del alias igual que el resto del sistema y exige que el
+-- nuevo alias normalizado no este tomado por otro participante del mismo
+-- evento. Se propaga a la tabla publica de resultados.
+create or replace function expotec_admin_renombrar_alias(
+    p_partida_id uuid,
+    p_nuevo_alias text
+)
+returns varchar
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_evento uuid;
+    v_partida_alias varchar;
+    v_norm text;
+    v_error text;
+    v_alias varchar;
+begin
+    perform expotec_guard_admin();
+
+    v_error := expotec_alias_inconveniente(p_nuevo_alias);
+    if v_error is not null then
+        raise exception '%', v_error;
+    end if;
+
+    v_norm := expotec_alias_normalizado(p_nuevo_alias);
+
+    select p.evento_id, p.alias
+    into v_evento, v_partida_alias
+    from expotec_partidas p
+    where p.id = p_partida_id;
+
+    if v_evento is null then
+        raise exception 'La partida no existe';
+    end if;
+
+    if exists (
+        select 1
+        from expotec_partidas p
+        where p.evento_id = v_evento
+          and p.id <> p_partida_id
+          and expotec_alias_normalizado(p.alias) = v_norm
+    ) then
+        raise exception 'Ese nombre ya esta en uso en este evento';
+    end if;
+
+    v_alias := btrim(p_nuevo_alias);
+
+    update expotec_partidas
+    set alias = v_alias
+    where id = p_partida_id;
+
+    update expotec_resultados_publicos
+    set alias = v_alias,
+        alias_normalizado = v_norm
+    where partida_id = p_partida_id;
+
+    return v_alias;
+end;
+$$;
+
+-- Renombra el perfil de un usuario (visible en toda la app). Es una accion de
+-- moderacion del equipo de Kodigo. El propio usuario puede seguir editando
+-- su nombre desde la app despues de la correccion.
+create or replace function expotec_admin_renombrar_perfil(
+    p_usuario_id uuid,
+    p_nombre text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_nombre text;
+begin
+    perform expotec_guard_admin();
+
+    v_nombre := btrim(coalesce(p_nombre, ''));
+    if length(v_nombre) < 2 or length(v_nombre) > 60 then
+        raise exception 'El nombre debe tener entre 2 y 60 caracteres';
+    end if;
+
+    update perfiles
+    set nombre_visible = v_nombre,
+        updated_at = now()
+    where id = p_usuario_id;
+
+    return found;
+end;
+$$;
+
+-- Lista de usuarios para la moderacion: paginada y con busqueda en nombre y
+-- usuario. Solo admins; no expone datos sensibles (ni correo ni XP detallado).
+create or replace function expotec_admin_lista_usuarios(
+    p_busqueda text default '',
+    p_limite integer default 50
+)
+returns table (
+    usuario_id uuid,
+    nombre_usuario text,
+    nombre_visible text,
+    nivel integer,
+    experiencia integer,
+    racha_dias integer,
+    created_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_q text;
+begin
+    perform expotec_guard_admin();
+
+    v_q := lower(btrim(coalesce(p_busqueda, '')));
+
+    return query
+    select
+        p.id, p.nombre_usuario, p.nombre_visible, p.nivel, p.experiencia,
+        p.racha_dias, p.created_at
+    from perfiles p
+    where v_q = ''
+       or lower(coalesce(p.nombre_usuario, '')) like '%' || v_q || '%'
+       or lower(coalesce(p.nombre_visible, '')) like '%' || v_q || '%'
+    order by p.created_at desc
+    limit least(coalesce(p_limite, 50), 200);
+end;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- 9. Grants de ejecucion
 --
@@ -5974,6 +6210,18 @@ revoke all on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[]) fro
 revoke all on function expotec_admin_estadisticas_evento(uuid) from public;
 
 revoke all on function expotec_admin_resultados_evento(uuid, text, integer) from public;
+
+revoke all on function expotec_admin_cambiar_estado_partida(uuid, boolean) from public;
+
+revoke all on function expotec_admin_reiniciar_ranking(uuid) from public;
+
+revoke all on function expotec_admin_rehabilitar_ranking(uuid) from public;
+
+revoke all on function expotec_admin_renombrar_alias(uuid, text) from public;
+
+revoke all on function expotec_admin_renombrar_perfil(uuid, text) from public;
+
+revoke all on function expotec_admin_lista_usuarios(text, integer) from public;
 
 -- Helpers internos: solo los consumen las demas funciones del servidor.
 revoke all on function expotec_alias_normalizado(text) from public;
@@ -8473,6 +8721,12 @@ grant execute on function expotec_admin_configurar_desafio(uuid, jsonb, uuid[])
 grant execute on function expotec_admin_estadisticas_evento(uuid) to authenticated;
 grant execute on function expotec_admin_resultados_evento(uuid, text, integer)
     to authenticated;
+grant execute on function expotec_admin_cambiar_estado_partida(uuid, boolean) to authenticated;
+grant execute on function expotec_admin_reiniciar_ranking(uuid) to authenticated;
+grant execute on function expotec_admin_rehabilitar_ranking(uuid) to authenticated;
+grant execute on function expotec_admin_renombrar_alias(uuid, text) to authenticated;
+grant execute on function expotec_admin_renombrar_perfil(uuid, text) to authenticated;
+grant execute on function expotec_admin_lista_usuarios(text, integer) to authenticated;
 
 
 -- ===========================================================================
