@@ -39,6 +39,7 @@
           </div>
         </section>
 
+        <ExpotecnicaTutorialModal :abierto="mostrarTutorialExpotecnica" @cerrar="cerrarTutorialYParticipar" />
         <p v-if="errorInvitado || errorDesafio" class="acceso-error" role="alert">
           {{ errorInvitado || errorDesafio }}
         </p>
@@ -98,6 +99,7 @@ import { useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import FantasmaKodigo from '@/components/FantasmaKodigo.vue'
 import { asegurarSesion, entrarComoInvitado, esInvitado, usarAuth } from '@/services/auth'
+import ExpotecnicaTutorialModal from '@/components/ExpotecnicaTutorialModal.vue'
 
 const router = useRouter()
 const { estado } = usarAuth()
@@ -106,6 +108,7 @@ const entrandoInvitado = ref(false)
 const entrandoDesafio = ref(false)
 const errorInvitado = ref('')
 const errorDesafio = ref('')
+const mostrarTutorialExpotecnica = ref(false)
 
 const invitadoActual = computed(() => esInvitado(estado.usuario))
 const cuentaActiva = computed(() => Boolean(estado.usuario) && !esInvitado(estado.usuario))
@@ -120,6 +123,17 @@ async function irAlDesafio() {
   if (entrandoDesafio.value) return
   errorDesafio.value = ''
   errorInvitado.value = ''
+
+  let yaVisto = false
+  try { yaVisto = sessionStorage.getItem('kodigo.expotec-tutorial-visto') === '1' } catch { yaVisto = false }
+  if (!yaVisto) {
+    mostrarTutorialExpotecnica.value = true
+    return
+  }
+  await entrarDesafio()
+}
+
+async function entrarDesafio() {
   entrandoDesafio.value = true
   try {
     await asegurarSesion()
@@ -130,6 +144,12 @@ async function irAlDesafio() {
   } finally {
     entrandoDesafio.value = false
   }
+}
+
+function cerrarTutorialYParticipar() {
+  try { sessionStorage.setItem('kodigo.expotec-tutorial-visto', '1') } catch { /* sin almacenamiento */ }
+  mostrarTutorialExpotecnica.value = false
+  void entrarDesafio()
 }
 
 async function iniciarSesionInvitado() {

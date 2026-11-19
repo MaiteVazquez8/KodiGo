@@ -6318,6 +6318,133 @@ as $$
            );
 $$;
 
+-- Helper: expande un programa de robot en una secuencia plana de instrucciones.
+--   repetir  → la instrucción siguiente ×3
+--   llamar   → el cuerpo completo del procedimiento F (una vez por llamada)
+--   bucleN   → el bloque entre bucleN y 'fin', ejecutado N veces
+--   fin      → cierra el bucle más interno (error si no hay bucle abierto)
+create or replace function _robot_expandir_recursivo(
+    p_tokens jsonb,
+    p_proc jsonb,
+    p_depth int
+)
+returns jsonb
+language plpgsql
+immutable
+as $$
+declare
+    v_out jsonb := '[]'::jsonb;
+    v_n integer;
+    v_i integer := 0;
+    v_inst text;
+    v_count integer;
+    v_ini integer;
+    v_fin integer;
+    v_balance integer;
+    v_body jsonb;
+    k integer;
+begin
+    if p_depth > 2 then
+        raise exception 'Demasiado anidamiento en el programa';
+    end if;
+
+    if p_tokens is null or jsonb_typeof(p_tokens) <> 'array' then
+        raise exception 'El programa debe ser un array de instrucciones';
+    end if;
+
+    v_n := jsonb_array_length(p_tokens);
+
+    while v_i < v_n loop
+        v_inst := p_tokens ->> v_i;
+
+        if v_inst = 'repetir' then
+            if v_i + 1 >= v_n then
+                raise exception 'repetir sin instruccion siguiente';
+            end if;
+            v_out := v_out
+                || jsonb_build_array(
+                    p_tokens -> (v_i + 1),
+                    p_tokens -> (v_i + 1),
+                    p_tokens -> (v_i + 1)
+                );
+            v_i := v_i + 2;
+
+        elsif v_inst = 'llamar' then
+            if p_depth >= 1 then
+                raise exception 'Los procedimientos no pueden llamar a otros procedimientos';
+            end if;
+            if p_proc is null or jsonb_array_length(p_proc) = 0 then
+                raise exception 'llamar requiere un procedimiento F no vacio';
+            end if;
+            v_out := v_out || _robot_expandir_recursivo(p_proc, p_proc, p_depth + 1);
+            v_i := v_i + 1;
+
+        elsif v_inst ~ '^bucle[0-9]+$' then
+            v_count := substring(v_inst from 6)::integer;
+            if v_count < 2 or v_count > 5 then
+                raise exception 'bucle debe indicar 2..5 repeticiones';
+            end if;
+
+            v_balance := 1;
+            v_ini := v_i + 1;
+            v_fin := null;
+            for j in v_ini .. v_n - 1 loop
+                if p_tokens ->> j ~ '^bucle[0-9]+$' then
+                    v_balance := v_balance + 1;
+                end if;
+                if p_tokens ->> j = 'fin' then
+                    v_balance := v_balance - 1;
+                    if v_balance = 0 then
+                        v_fin := j;
+                        exit;
+                    end if;
+                end if;
+            end loop;
+
+            if v_fin is null then
+                raise exception 'bucle sin fin correspondiente';
+            end if;
+
+            select coalesce(jsonb_agg(value), '[]'::jsonb)
+            into v_body
+            from jsonb_array_elements(p_tokens) with ordinality as t(value, n)
+            where t.n >= v_i + 2 and t.n <= v_fin;
+
+            for k in 1 .. v_count loop
+                v_out := v_out || _robot_expandir_recursivo(v_body, p_proc, p_depth + 1);
+            end loop;
+            v_i := v_fin + 1;
+
+        elsif v_inst = 'fin' then
+            raise exception 'fin sin bucle que lo abra';
+
+        else
+            v_out := v_out || jsonb_build_array(v_inst);
+            v_i := v_i + 1;
+        end if;
+    end loop;
+
+    return v_out;
+end;
+$$;
+
+create or replace function _robot_expandir(
+    p_tokens jsonb,
+    p_proc jsonb
+)
+returns jsonb
+language plpgsql
+immutable
+as $$
+begin
+    return _robot_expandir_recursivo(
+        p_tokens,
+        coalesce(p_proc, '[]'::jsonb),
+        0
+    );
+end;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- 6. Correccion de las doce modalidades
 -- ---------------------------------------------------------------------------
@@ -6365,6 +6492,7 @@ declare
     v_i integer;
     v_instr text;
     v_expanded jsonb;
+    v_proc jsonb;
     v_fila integer;
     v_columna integer;
     v_siguiente integer;
@@ -6634,6 +6762,7 @@ begin
 
     elsif v_tipo = 'robot' then
         v_respuesta := p_respuesta -> 'robot';
+        v_proc := p_respuesta -> 'robotProc';
 
         if v_respuesta is null or jsonb_typeof(v_respuesta) <> 'array'
            or jsonb_array_length(v_respuesta) = 0 then
@@ -6642,6 +6771,19 @@ begin
 
         if jsonb_array_length(v_respuesta) > 30 then
             raise exception 'La secuencia supera el limite de 30 instrucciones';
+        end if;
+
+        if v_proc is not null then
+            if jsonb_typeof(v_proc) <> 'array' then
+                raise exception 'robotProc debe ser un array de instrucciones';
+            end if;
+            if jsonb_array_length(v_proc) > 12 then
+                raise exception 'El procedimiento F supera las 12 instrucciones';
+            end if;
+            if jsonb_array_length(v_proc) > 0
+               and v_proc::text ilike '%llamar%' then
+                raise exception 'Los procedimientos no pueden llamar a otros procedimientos';
+            end if;
         end if;
 
         v_pos := (v_datos -> 'tablero' ->> 'inicio')::integer;
@@ -6654,19 +6796,12 @@ begin
             raise exception 'El tablero del nivel no esta configurado';
         end if;
 
-        -- Expandir bucles: 'repetir' duplica la instruccion siguiente ×3.
-        v_expanded := '[]'::jsonb;
-        v_i := 0;
-        while v_i < v_longitud loop
-            v_instr := v_respuesta ->> v_i;
-            if v_instr = 'repetir' and v_i + 1 < v_longitud then
-                v_expanded := v_expanded || jsonb_build_array(v_respuesta -> (v_i + 1), v_respuesta -> (v_i + 1), v_respuesta -> (v_i + 1));
-                v_i := v_i + 2;
-            else
-                v_expanded := v_expanded || jsonb_build_array(v_instr);
-                v_i := v_i + 1;
-            end if;
-        end loop;
+        -- Expandir: repetir ×3, llamar F y bucles de bloque (bucleN..fin).
+        v_expanded := _robot_expandir(v_respuesta, v_proc);
+
+        if jsonb_array_length(v_expanded) > 60 then
+            raise exception 'La secuencia expandida supera las 60 instrucciones';
+        end if;
 
         v_correcta := false;
         for v_i in 0 .. jsonb_array_length(v_expanded) - 1 loop
@@ -6708,7 +6843,42 @@ begin
 
                 v_pos := v_siguiente;
 
+            elsif v_instr = 'saltar' then
+                -- A salta 2 casillas en la direccion a la que mira, pasando por encima
+                -- de la casilla intermedia aunque sea un obstaculo; la casilla de
+                -- aterrizaje debe estar libre y dentro del tablero.
+                v_fila := floor(v_pos / 5) + 2 * case v_rumbo
+                    when 0 then -1
+                    when 1 then 0
+                    when 2 then 1
+                    else 0
+                end;
+                v_columna := mod(v_pos, 5) + 2 * case v_rumbo
+                    when 0 then 0
+                    when 1 then 1
+                    when 2 then 0
+                    else -1
+                end;
+
+                if v_fila < 0 or v_fila > 4 or v_columna < 0 or v_columna > 4 then
+                    exit;
+                end if;
+
+                v_siguiente := v_fila * 5 + v_columna;
+
+                if exists (
+                    select 1
+                    from jsonb_array_elements(coalesce(v_muros, '[]'::jsonb)) m
+                    where (m #>> '{}')::integer = v_siguiente
+                ) then
+                    exit;
+                end if;
+
+                v_pos := v_siguiente;
+
             else
+                raise exception 'Instruccion no reconocida: %', v_instr;
+            end if;
                 raise exception 'Instruccion no reconocida: %', v_instr;
             end if;
         end loop;
@@ -8327,7 +8497,7 @@ insert into unidades (id, curso_id, nombre, descripcion, orden, estado_publicaci
 insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion) values ('50000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'Despegue', 'Hoy arranca tu primera mision: llevar al robot desde el inicio hasta la estrella. Avanza hacia donde mira hasta salir del tablero.', 'Cada avance cuenta como una instrucción en la secuencia.', 1, 'publicado') on conflict (id) do nothing;
 insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion) values ('50000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'Primeros giros', 'Girar no te mueve de la casilla: sólo cambia hacia dónde mira el robot. Orientá primero y después avanzá.', 'Girá a la izquierda para mirar hacia arriba.', 2, 'publicado') on conflict (id) do nothing;
 insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion) values ('50000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000001', 'Recorrido clásico', 'Combiná giros y avances: avanzá cuatro casillas, girá a la derecha y avanzá hasta la estrella.', 'Orientá el robot primero, después avanzá paso a paso.', 3, 'publicado') on conflict (id) do nothing;
-insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion) values ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000001', 'El rodeo', 'Las casillas con × son obstáculos: el robot no puede atravesarlas. Buscá una ruta alternativa.', 'Si un obstáculo te bloquea, girá hacia el espacio libre.', 4, 'publicado') on conflict (id) do nothing;
+insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion) values ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000001', 'El primer salto', 'Habrá un bloqueo que jamás podrás rodear: la casilla siguiente está cerrada y no hay espacio de costado. El salto te lleva dos casillas adelante saltando por encima.', 'Salta el muro: Avanzar, Saltar, Avanzar.', 4, 'publicado') on conflict (id) do nothing;
 insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion) values ('50000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000001', 'Tres bloqueos', 'Tres obstáculos te separan de la estrella. Analizá el tablero antes de escribir tu secuencia.', 'Pensá el recorrido completo antes de tocar las instrucciones.', 5, 'publicado') on conflict (id) do nothing;
 insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion) values ('50000000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000002', 'El atajo tapado', 'El camino directo está bloqueado. Mirá dos veces el mapa: hay una ruta por la derecha que evita los obstáculos.', 'Cuando un camino se cierra, buscá el rodeo.', 1, 'publicado') on conflict (id) do nothing;
 insert into lecciones (id, unidad_id, titulo, explicacion, ejemplo_codigo, orden, estado_publicacion) values ('50000000-0000-0000-0000-000000000007', '40000000-0000-0000-0000-000000000002', 'Rodeo obligatorio', 'No hay atajo: la única ruta posible rodea el bloqueo por arriba. Este es el nivel con más giros de la unidad.', 'Cada giro también cuenta como una instrucción.', 2, 'publicado') on conflict (id) do nothing;
@@ -8345,27 +8515,27 @@ insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_pub
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('bbde6619-f014-6993-a01d-302769ac4a83', '55a41b1d-fdaa-9b02-5b91-cf6f749cd707', '{"objetivo": "Girá y llegá a la estrella."}'::jsonb, 'Un giro a la izquierda y cuatro avances te llevan a la estrella.') on conflict (pregunta_id) do nothing;
 insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('fb4ebd1c-4723-4baa-fe8c-d25bdb6554bc', '50000000-0000-0000-0000-000000000003', 'Combiná avances y giros para salir del inicio y llegar a la estrella.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 20, "rumbo": 0, "meta": 4, "muros": []}, "instrucciones": ["avanzar", "izquierda", "derecha"], "maxInstrucciones": 20, "objetivo": "Alcanzá la estrella con el menor número de pasos.", "modo": "normal", "ejemplo": "Cuatro avances, un giro derecha y cuatro avances."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('c928c411-b8bf-69b4-a8ae-d2ffce890ca4', 'fb4ebd1c-4723-4baa-fe8c-d25bdb6554bc', '{"objetivo": "Alcanzá la estrella con el menor número de pasos."}'::jsonb, 'Cuatro avances hacia arriba, un giro a la derecha y cuatro avances alcanzan la estrella.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('a6556a96-a6a0-8878-c6d0-583f40dc6a4b', '50000000-0000-0000-0000-000000000004', 'No atravesés los obstáculos (×): buscá una ruta alternativa alrededor.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 22, "rumbo": 1, "meta": 4, "muros": [17, 19]}, "instrucciones": ["avanzar", "izquierda", "derecha"], "maxInstrucciones": 20, "objetivo": "Evitá los obstáculos.", "tutorial": "tutorial-obstaculos", "modo": "normal", "ejemplo": "Subí por la columna derecha y después cruzá por arriba."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('a6556a96-a6a0-8878-c6d0-583f40dc6a4b', '50000000-0000-0000-0000-000000000004', 'Un muro bloquea el camino. Usa el salto para superarlo y llegá a la estrella (dos casillas adelante).', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 22, "rumbo": 0, "meta": 2, "muros": [12]}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar"], "maxInstrucciones": 5, "objetivo": "Usa el salto para superar el obstáculo.", "tutorial": "tutorial-salto", "modo": "normal", "ejemplo": "Avanzá, saltá por encima del muro y seguí avanzando."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('9c4c3db4-f456-8987-778d-871ff8d90968', 'a6556a96-a6a0-8878-c6d0-583f40dc6a4b', '{"objetivo": "Evitá los obstáculos."}'::jsonb, 'Avanzá hasta 23, girá a la izquierda, subí por la columna y girá a la derecha para entrar en la estrella.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('74f851fb-8567-ac96-cd53-01d96d883425', '50000000-0000-0000-0000-000000000005', 'Tres obstáculos bloquean el camino directo. Planificá tu recorrido.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 24, "rumbo": 3, "meta": 0, "muros": [23, 18, 12]}, "instrucciones": ["avanzar", "izquierda", "derecha"], "maxInstrucciones": 25, "objetivo": "Rodeá los tres obstáculos.", "modo": "normal", "ejemplo": "El bloqueo central obliga a rodear por arriba y a cruzar la fila superior."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('74f851fb-8567-ac96-cd53-01d96d883425', '50000000-0000-0000-0000-000000000005', 'Tres obstáculos bloquean el camino directo. Planificá tu recorrido.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 24, "rumbo": 3, "meta": 0, "muros": [23, 18, 12]}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar", "llamar", "bucle2", "bucle3", "bucle4", "bucle5", "fin"], "maxInstrucciones": 25, "objetivo": "Rodeá los tres obstáculos.", "modo": "normal", "ejemplo": "El bloqueo central obliga a rodear por arriba y a cruzar la fila superior."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('8abb72ad-e263-4a86-77e5-24d67bf8308c', '74f851fb-8567-ac96-cd53-01d96d883425', '{"objetivo": "Rodeá los tres obstáculos."}'::jsonb, 'Girá a la derecha, subí por la columna derecha y cruzá la fila superior hacia la estrella.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('e36f60a9-6a34-8d26-6034-c95b3029ea3d', '50000000-0000-0000-0000-000000000006', 'El camino directo está tapado. Encontrá el atajo por la derecha.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 11, "rumbo": 1, "meta": 14, "muros": [13, 8, 18, 3]}, "instrucciones": ["avanzar", "izquierda", "derecha"], "maxInstrucciones": 15, "objetivo": "Elegí la ruta correcta.", "modo": "normal", "ejemplo": "Bajá, entrá por la derecha y cruzá por abajo."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('e36f60a9-6a34-8d26-6034-c95b3029ea3d', '50000000-0000-0000-0000-000000000006', 'El camino directo está tapado. Encontrá el atajo por la derecha.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 11, "rumbo": 1, "meta": 14, "muros": [13, 8, 18, 3]}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar"], "maxInstrucciones": 15, "objetivo": "Elegí la ruta correcta.", "modo": "normal", "ejemplo": "El salto puede ahorrarte un rodeo entero: miraló desde arriba."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('1272ae10-bcf5-1d38-c22b-98c5c41601fb', 'e36f60a9-6a34-8d26-6034-c95b3029ea3d', '{"objetivo": "Elegí la ruta correcta."}'::jsonb, 'El atajo: avanzá, bajá por la derecha, doblé a la izquierda y cruzá por abajo.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('ef09b43d-fb5b-85a1-fdd2-de9e174b2b5d', '50000000-0000-0000-0000-000000000007', 'No hay atajos: la única ruta posible rodea el bloqueo por arriba.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 16, "rumbo": 0, "meta": 24, "muros": [22, 17, 12, 2]}, "instrucciones": ["avanzar", "izquierda", "derecha"], "maxInstrucciones": 15, "objetivo": "Encontrá la ruta válida.", "modo": "normal", "ejemplo": "Subí dos casillas y después cruzá por la derecha."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('ef09b43d-fb5b-85a1-fdd2-de9e174b2b5d', '50000000-0000-0000-0000-000000000007', 'No hay atajos: la única ruta posible rodea el bloqueo por arriba.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 16, "rumbo": 0, "meta": 24, "muros": [22, 17, 12, 2]}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar"], "maxInstrucciones": 15, "objetivo": "Encontrá la ruta válida.", "modo": "normal", "ejemplo": "Si el camino está cerrado, saltá por encima."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('c989aa42-4b25-f7ae-51ec-812f19cb254e', 'ef09b43d-fb5b-85a1-fdd2-de9e174b2b5d', '{"objetivo": "Encontrá la ruta válida."}'::jsonb, 'Sólo hay una ruta: subir y cruzar por la derecha hacia la estrella.') on conflict (pregunta_id) do nothing;
 insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('1fd72277-543a-a0fb-fb97-1923b229c24b', '50000000-0000-0000-0000-000000000008', 'Este algoritmo está incompleto: no alcanza la estrella. Corregilo para que funcione.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 15, "rumbo": 1, "meta": 19, "muros": []}, "instrucciones": ["avanzar", "izquierda", "derecha"], "maxInstrucciones": 30, "objetivo": "Corregí el algoritmo defectuoso.", "modo": "corregir", "errores": ["Avanzar → Avanzar → Avanzar", "A la secuencia le falta un avance: el robot se detiene una casilla antes de la estrella."], "ejemplo": "Editá la secuencia hasta que el robot llegue a la estrella."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('467d463a-e7d7-b4af-b962-37e8d41bef36', '1fd72277-543a-a0fb-fb97-1923b229c24b', '{"objetivo": "Corregí el algoritmo defectuoso."}'::jsonb, 'La secuencia original avanza sólo tres casillas; agregá un cuarto avance para llegar a la estrella.') on conflict (pregunta_id) do nothing;
 insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('f670f5d2-7e64-ad42-e6e7-7af8f0c54619', '50000000-0000-0000-0000-000000000009', 'Construí la secuencia exacta: 10 instrucciones mínimas. Cada giro también cuenta.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 10, "rumbo": 2, "meta": 8, "muros": [12, 7, 17]}, "instrucciones": ["avanzar", "izquierda", "derecha"], "maxInstrucciones": 12, "objetivo": "Llegá con precisión.", "modo": "normal", "ejemplo": "Bajá y hacé un rodeo por la izquierda."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('76e439d3-5806-7516-2e03-198a5bd32553', 'f670f5d2-7e64-ad42-e6e7-7af8f0c54619', '{"objetivo": "Llegá con precisión."}'::jsonb, 'La solución: avanzar, avanzar, girar izquierda, avanzar, avanzar, avanzar, girar izquierda, avanzar, avanzar y avanzar.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('b1de3c13-55b4-d8f8-873a-9dac4f97a487', '50000000-0000-0000-0000-00000000000f', 'Cinco obstáculos y sólo 12 instrucciones. Pensá, planificá y ejecutá.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 13, "rumbo": 1, "meta": 10, "muros": [11, 7, 2, 16, 6]}, "instrucciones": ["avanzar", "izquierda", "derecha"], "maxInstrucciones": 12, "objetivo": "Resolvé el tablero con el menor número de instrucciones.", "modo": "normal", "ejemplo": "El centro está bloqueado; rodeá por abajo o por arriba."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('b1de3c13-55b4-d8f8-873a-9dac4f97a487', '50000000-0000-0000-0000-00000000000f', 'Cinco obstáculos y sólo 12 instrucciones. Pensá, planificá y ejecutá.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 13, "rumbo": 1, "meta": 10, "muros": [11, 7, 2, 16, 6]}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar"], "maxInstrucciones": 12, "objetivo": "Resolvé el tablero con el menor número de instrucciones.", "modo": "normal", "ejemplo": "El centro está bloqueado: saltá un muro clave o rodeá por abajo o por arriba."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('d64c03d3-8754-3663-1e06-48fd0a08af7d', 'b1de3c13-55b4-d8f8-873a-9dac4f97a487', '{"objetivo": "Resolvé el tablero con el menor número de instrucciones."}'::jsonb, 'La ruta mínima: girá a la derecha, avanzá, avanzá, girá a la izquierda, avanzá, avanzá, avanzá, girá a la derecha, avanzá y avanzá.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('acdb920b-7e50-965d-a0b3-b491a14acb33', '50000000-0000-0000-0000-00000000000a', 'Usá un bucle para repetir avances en vez de escribir varios en cadena.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 24, "rumbo": 0, "meta": 9, "muros": []}, "instrucciones": ["avanzar", "izquierda", "derecha", "repetir"], "maxInstrucciones": 10, "objetivo": "Usá un bucle para repetir avances.", "tutorial": "tutorial-bucles", "modo": "normal", "ejemplo": "Repetir + Avanzar ejecuta tres avances de una sola vez."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('acdb920b-7e50-965d-a0b3-b491a14acb33', '50000000-0000-0000-0000-00000000000a', 'Usá un bucle para repetir avances en vez de escribir varios en cadena.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 24, "rumbo": 0, "meta": 9, "muros": []}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar", "llamar", "bucle2", "bucle3", "bucle4", "bucle5", "fin"], "maxInstrucciones": 10, "objetivo": "Usá un bucle para repetir avances.", "tutorial": "tutorial-bucles", "modo": "normal", "ejemplo": "Repetir + Avanzar ejecuta tres avances de una sola vez."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('4edbe5e4-43d3-bc80-0a20-e7434822f1cc', 'acdb920b-7e50-965d-a0b3-b491a14acb33', '{"objetivo": "Usá un bucle para repetir avances."}'::jsonb, 'Repetir seguido de Avanzar deja al robot exactamente en la estrella (24 → 19 → 14 → 9).') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('c1df8d57-3806-6140-2442-4927dfeb3710', '50000000-0000-0000-0000-00000000000b', 'Reemplazá una secuencia larga de avances por un solo bucle con número.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 22, "rumbo": 0, "meta": 7, "muros": []}, "instrucciones": ["avanzar", "izquierda", "derecha", "repetir"], "maxInstrucciones": 10, "objetivo": "Optimizá usando un bucle.", "modo": "normal", "ejemplo": "Repetir + Avanzar cubre los tres avances que necesitás."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('c1df8d57-3806-6140-2442-4927dfeb3710', '50000000-0000-0000-0000-00000000000b', 'Reemplazá una secuencia larga de avances por un solo bucle con número.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 22, "rumbo": 0, "meta": 7, "muros": []}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar", "llamar", "bucle2", "bucle3", "bucle4", "bucle5", "fin"], "maxInstrucciones": 10, "objetivo": "Optimizá usando un bucle o un procedimiento.", "tutorial": "tutorial-procedimientos", "modo": "normal", "ejemplo": "Repetir + Avanzar cubre los tres avances que necesitás."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('64803df1-cab3-ca3d-1b4f-90d41bf77f90', 'c1df8d57-3806-6140-2442-4927dfeb3710', '{"objetivo": "Optimizá usando un bucle."}'::jsonb, 'Repetir seguido de Avanzar ejecuta los tres avances que hacen falta: 22 → 17 → 12 → 7.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('e00bbbb9-5c28-3998-0cf1-835fe4c84412', '50000000-0000-0000-0000-00000000000c', 'Tomá decisiones: mirá la orientación antes de definir tu giro.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 19, "rumbo": 1, "meta": 23, "muros": []}, "instrucciones": ["avanzar", "izquierda", "derecha", "repetir"], "maxInstrucciones": 10, "objetivo": "Tomá decisiones: mirá qué hay antes de girar.", "tutorial": "tutorial-decisiones", "modo": "normal", "ejemplo": "Como no hay condición si, mirar la orientación ya te dice qué giro conviene."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('e00bbbb9-5c28-3998-0cf1-835fe4c84412', '50000000-0000-0000-0000-00000000000c', 'Tomá decisiones: mirá la orientación antes de definir tu giro.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 19, "rumbo": 1, "meta": 23, "muros": []}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar", "llamar", "bucle2", "bucle3", "bucle4", "bucle5", "fin"], "maxInstrucciones": 10, "objetivo": "Tomá decisiones: mirá qué hay antes de girar.", "tutorial": "tutorial-decisiones", "modo": "normal", "ejemplo": "Como no hay condición si, mirar la orientación ya te dice qué giro conviene."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('5c845949-ca2a-551b-9226-341db986e81d', 'e00bbbb9-5c28-3998-0cf1-835fe4c84412', '{"objetivo": "Tomá decisiones: mirá qué hay antes de girar."}'::jsonb, 'Girá a la derecha para bajar, avanzá una casilla, girá otra vez a la derecha y avanzá hasta la estrella.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('e4e9c827-7d64-9c8c-dd14-7acde3806ff6', '50000000-0000-0000-0000-00000000000d', 'Si sucede esto, hacé esto otro: anticipate y corregí tu secuencia.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 24, "rumbo": 3, "meta": 0, "muros": [22, 17, 12]}, "instrucciones": ["avanzar", "izquierda", "derecha", "repetir"], "maxInstrucciones": 15, "objetivo": "Si hay un obstáculo, girá y seguí.", "modo": "normal", "ejemplo": "El camino central está bloqueado; subí por la derecha y cruzá por arriba."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('e4e9c827-7d64-9c8c-dd14-7acde3806ff6', '50000000-0000-0000-0000-00000000000d', 'Si sucede esto, hacé esto otro: anticipate y corregí tu secuencia.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 24, "rumbo": 3, "meta": 0, "muros": [22, 17, 12]}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar", "llamar", "bucle2", "bucle3", "bucle4", "bucle5", "fin"], "maxInstrucciones": 15, "objetivo": "Si hay un obstáculo, girá y seguí.", "modo": "normal", "ejemplo": "El camino central está bloqueado; saltá o subí por la derecha y cruzá por arriba."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('a4ebc30d-7d29-3d50-d88d-a9ce1e48a7d2', 'e4e9c827-7d64-9c8c-dd14-7acde3806ff6', '{"objetivo": "Si hay un obstáculo, girá y seguí."}'::jsonb, 'Girá a la derecha y subí por el costado derecho; después girá a la izquierda, cruzá la fila superior y entrá a la estrella.') on conflict (pregunta_id) do nothing;
-insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('b2085b3e-b6f0-b13e-7780-c864e30047dd', '50000000-0000-0000-0000-00000000000e', 'Desafío final: combiná todo lo que ya sabés en un solo recorrido.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 20, "rumbo": 1, "meta": 0, "muros": [7, 12, 17]}, "instrucciones": ["avanzar", "izquierda", "derecha", "repetir"], "maxInstrucciones": 20, "objetivo": "Resolvé el tablero completo.", "modo": "normal", "ejemplo": "Combiná giros y bucles para evitar tres obstáculos."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
+insert into preguntas (id, leccion_id, enunciado, tipo, datos, orden, estado_publicacion) values ('b2085b3e-b6f0-b13e-7780-c864e30047dd', '50000000-0000-0000-0000-00000000000e', 'Desafío final: combiná todo lo que ya sabés en un solo recorrido.', 'robot', '{"tablero": {"dimensiones": 5, "inicio": 20, "rumbo": 1, "meta": 0, "muros": [7, 12, 17]}, "instrucciones": ["avanzar", "izquierda", "derecha", "saltar", "llamar", "bucle2", "bucle3", "bucle4", "bucle5", "fin"], "maxInstrucciones": 20, "objetivo": "Resolvé el tablero completo combinando todo lo aprendido.", "tutorial": "tutorial-procedimientos", "modo": "normal", "ejemplo": "Combiná giros, bucles y saltos para superar los tres obstáculos."}'::jsonb, 1, 'publicado') on conflict (id) do nothing;
 insert into soluciones (id, pregunta_id, solucion, explicacion) values ('98a53068-5404-393e-0a32-f45794f7309d', 'b2085b3e-b6f0-b13e-7780-c864e30047dd', '{"objetivo": "Resolvé el tablero completo."}'::jsonb, 'El camino final combina giros y bucles para evitar los tres obstáculos.') on conflict (pregunta_id) do nothing;
