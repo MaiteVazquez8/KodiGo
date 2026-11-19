@@ -88,44 +88,42 @@
     </template>
 
     <template v-else-if="tipo === 'ordenar'">
-      <div class="hay-instruccion">
-        Ordená los elementos con flechas o arrastrándo el ítem.
+      <div class="hay-instruccion" role="status">
+        Ordená los pasos: tocá uno para levantarlo y otro para moverlo, o mantené presionado el icono de agarre para arrastrarlo.
       </div>
-      <ol class="pasosOrden">
+      <transition-group tag="ol" name="paso-mover" class="pasosOrden">
         <li
           v-for="(elemento, index) in elementosOrdenables"
           :key="elemento.id"
           class="paso"
-          :class="{ 'is-activo': index === marcadoOrden }"
-          draggable
-          @dragstart="arrancarArrastre(index)"
-          @dragover.prevent
-          @drop="soltarArrastre(index)"
+          :class="{
+            'is-seleccionado': elemento.id === pasoSeleccionado,
+            'is-agarrando': pendienteArrastre?.id === elemento.id,
+            'is-arrastrando': elemento.id === dragId,
+          }"
         >
-          <div class="paso-orden">
-            <button
-              type="button"
-              class="paso-btn"
-              :disabled="bloqueado || index === 0"
-              aria-label="Subir"
-              @click="moverPaso(index, -1)"
-            >
-              <q-icon name="expand_less" size="16px" />
-            </button>
-            <button
-              type="button"
-              class="paso-btn"
-              :disabled="bloqueado || index === elementosOrdenables.length - 1"
-              aria-label="Bajar"
-              @click="moverPaso(index, 1)"
-            >
-              <q-icon name="expand_more" size="16px" />
-            </button>
-          </div>
-          <span class="paso-conteo k-mono">{{ index + 1 }}</span>
-          <span class="paso-texto">{{ opcionesPorId[elemento.id] }}</span>
+          <button
+            type="button"
+            class="paso-main"
+            :disabled="bloqueado"
+            :aria-pressed="elemento.id === pasoSeleccionado"
+            :aria-label="`Paso ${index + 1}. Tocá para levantar y soltá sobre otro para moverlo`"
+            @click="tocarPaso(elemento.id)"
+          >
+            <span class="paso-conteo k-mono">{{ index + 1 }}</span>
+            <span class="paso-texto">{{ opcionesPorId[elemento.id] }}</span>
+          </button>
+          <button
+            type="button"
+            class="paso-agarre"
+            :disabled="bloqueado"
+            aria-label="Mantener presionado para arrastrar y reordenar"
+            @pointerdown="agarrarPaso(elemento.id, index, $event)"
+          >
+            <q-icon name="drag_handle" size="22px" />
+          </button>
         </li>
-      </ol>
+      </transition-group>
     </template>
 
     <template v-else-if="tipo === 'relacionar'">
@@ -394,7 +392,9 @@ const indiceBlancoActivo = ref(null)
 const ordenElementos = ref([])
 const paresFormados = ref({})
 const lateralPivot = ref(null)
-const marcadoOrden = ref(-1)
+const pasoSeleccionado = ref(null)
+const dragId = ref(null)
+const pendienteArrastre = ref(null)
 const codigoEscrito = ref('')
 const salidaVista = ref(null)
 const ejecutandoVista = ref(false)
@@ -635,7 +635,12 @@ watch(
     indiceBlancoActivo.value = null
     paresFormados.value = {}
     lateralPivot.value = null
-    marcadoOrden.value = -1
+    pasoSeleccionado.value = null
+    dragId.value = null
+    if (pendienteArrastre.value?.timerId != null) {
+      window.clearTimeout(pendienteArrastre.value.timerId)
+    }
+    pendienteArrastre.value = null
     codigoEscrito.value = datos.value.codigo_inicial ?? datos.value.plantilla ?? ''
     salidaVista.value = null
     ejecutandoVista.value = false
@@ -662,35 +667,110 @@ function limpiarBlanco(clave) {
 }
 
 // ---------------------------------------------------------------------------
-// Ordenar: mezcla inicial estable; se ordena con botones o arrastando.
+// Ordenar: mezcla inicial estable; se toca para levantar y soltar, o se
+// arrastra con un icono de agarre (Pointer Events, funciona en táctil y mouse).
 // ---------------------------------------------------------------------------
 
 const elementosOrdenables = computed(() =>
   ordenElementos.value.map((id) => ({ id })),
 )
 
-function moverPaso(index, delta) {
-  const nuevo = Math.min(Math.max(index + delta, 0), ordenElementos.value.length - 1)
-  if (nuevo === index) return
+function tocarPaso(id) {
+  if (bloqueado.value) return
   const lista = ordenElementos.value
-  const item = lista[index]
-  lista.splice(index, 1)
-  lista.splice(nuevo, 0, item)
+  if (pasoSeleccionado.value === null) {
+    pasoSeleccionado.value = id
+    return
+  }
+  if (pasoSeleccionado.value === id) {
+    pasoSeleccionado.value = null
+    return
+  }
+  const desde = lista.findIndex((elementoId) => elementoId === pasoSeleccionado.value)
+  const destino = lista.findIndex((elementoId) => elementoId === id)
+  if (desde === -1 || destino === -1) return
+  const [movido] = lista.splice(desde, 1)
+  lista.splice(destino, 0, movido)
+  pasoSeleccionado.value = null
 }
 
-let indexArrastre = null
-
-function arrancarArrastre(index) {
-  indexArrastre = index
+function indiceDesdePuntero(clienteY) {
+  const nodos = [...document.querySelectorAll('.pasosOrden .paso')]
+  if (!nodos.length) return 0
+  for (let i = 0; i < nodos.length; i += 1) {
+    const rect = nodos[i].getBoundingClientRect()
+    if (clienteY < rect.top + rect.height / 2) return i
+  }
+  return nodos.length - 1
 }
 
-function soltarArrastre(destino) {
-  if (indexArrastre === null || indexArrastre === destino) return
-  const lista = ordenElementos.value
-  const item = lista[indexArrastre]
-  lista.splice(indexArrastre, 1)
-  lista.splice(destino, 0, item)
-  indexArrastre = null
+let indiceObjetivo = 0
+// Mantener presionado el icono de agarre (ms) antes de que el arrastre se active.
+const HOLD_MS = 380
+// Si el puntero se mueve más que esto antes del hold, se descarta y se puede desplazar el contenido.
+const CANCEL_DIST = 12
+const CANCEL_DIST_2 = CANCEL_DIST * CANCEL_DIST
+
+function cancelarPendiente() {
+  const pendiente = pendienteArrastre.value
+  if (pendiente?.timerId != null) window.clearTimeout(pendiente.timerId)
+  pendienteArrastre.value = null
+}
+
+function activarArrastre() {
+  const pendiente = pendienteArrastre.value
+  if (!pendiente) return
+  pendiente.activo = true
+  dragId.value = pendiente.id
+  pasoSeleccionado.value = null
+  indiceObjetivo = pendiente.index
+  if (navigator.vibrate) navigator.vibrate(10)
+}
+
+function enMovimiento(evento) {
+  const pendiente = pendienteArrastre.value
+  if (!pendiente) return
+
+  if (!pendiente.activo) {
+    const dx = evento.clientX - pendiente.x
+    const dy = evento.clientY - pendiente.y
+    if (dx * dx + dy * dy > CANCEL_DIST_2) {
+      cancelarPendiente()
+    }
+    return
+  }
+
+  evento.preventDefault()
+  const destino = indiceDesdePuntero(evento.clientY)
+  if (destino === indiceObjetivo) return
+  const desde = ordenElementos.value.findIndex((elementoId) => elementoId === dragId.value)
+  if (desde === -1) return
+  const [movido] = ordenElementos.value.splice(desde, 1)
+  ordenElementos.value.splice(destino, 0, movido)
+  indiceObjetivo = destino
+}
+
+function terminarArrastre() {
+  cancelarPendiente()
+  window.removeEventListener('pointermove', enMovimiento)
+  dragId.value = null
+}
+
+function agarrarPaso(id, index, evento) {
+  if (bloqueado.value) return
+  evento.preventDefault()
+  cancelarPendiente()
+  pendienteArrastre.value = {
+    id,
+    index,
+    x: evento.clientX,
+    y: evento.clientY,
+    activo: false,
+    timerId: window.setTimeout(activarArrastre, HOLD_MS),
+  }
+  window.addEventListener('pointermove', enMovimiento, { passive: false })
+  window.addEventListener('pointerup', terminarArrastre, { once: true })
+  window.addEventListener('pointercancel', terminarArrastre, { once: true })
 }
 
 // ---------------------------------------------------------------------------
@@ -1087,6 +1167,20 @@ function accionPrincipal() {
   opacity: 0.7;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .paso {
+    transition: none;
+  }
+
+  .paso-mover-move {
+    transition: none;
+  }
+
+  .paso.is-agarrando {
+    animation: none;
+  }
+}
+
 .campo-texto {
   width: 100%;
   padding: 14px 16px;
@@ -1112,20 +1206,108 @@ function accionPrincipal() {
   margin: 0;
 }
 
+/* Movimiento suave al reordenar (Vue TransitionGroup aplica el FLIP). */
+.paso-mover-move {
+  transition: transform 0.28s cubic-bezier(0.22, 1.2, 0.36, 1);
+}
+
 .paso {
+  position: relative;
   display: flex;
   align-items: stretch;
-  gap: 0;
-  margin-top: var(--k-space-1);
   border: 2px solid var(--k-line);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(24, 9, 31, 0.96), rgba(12, 6, 17, 1));
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
-.paso-orden {
+.paso.is-seleccionado {
+  border-color: var(--k-accent);
+  box-shadow:
+    0 0 0 2px rgba(142, 5, 194, 0.45),
+    0 10px 22px rgba(142, 5, 194, 0.25),
+    inset 0 0 0 1px rgba(142, 5, 194, 0.35);
+}
+
+.paso.is-arrastrando {
+  z-index: 3;
+  border-color: var(--k-accent);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.55),
+    0 0 0 2px rgba(142, 5, 194, 0.4);
+}
+
+.paso-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.paso.is-agarrando {
+  border-color: var(--k-accent);
+  animation: paso-agarrando 0.7s ease-in-out infinite;
+}
+
+@keyframes paso-agarrando {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(142, 5, 194, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(142, 5, 194, 0.25); }
+}
+
+.paso-main:focus-visible {
+  outline: 2px solid var(--k-accent);
+  outline-offset: -2px;
+  border-radius: 12px;
+}
+
+.paso-main:disabled {
+  cursor: default;
+}
+
+.paso-agarre {
+  align-self: stretch;
+  flex-shrink: 0;
   display: grid;
-  align-content: center;
-  padding: 4px;
+  place-items: center;
+  width: 48px;
+  margin: 4px 6px 4px 0;
+  border: none;
+  border-radius: 10px;
+  background: rgba(240, 70, 240, 0.1);
+  color: var(--k-text-2);
+  cursor: grab;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.paso-agarre:active {
+  cursor: grabbing;
+  background: rgba(240, 70, 240, 0.22);
+  color: var(--k-accent);
+}
+
+.paso-agarre:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.paso-agarre:focus-visible {
+  outline: 2px solid var(--k-accent);
 }
 
 .paso-btn {
@@ -1149,18 +1331,18 @@ function accionPrincipal() {
 
 .paso-conteo {
   align-self: center;
-  padding: 0 10px;
+  padding: 0 4px 0 16px;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 800;
   color: var(--k-accent);
 }
 
 .paso-texto {
   flex: 1;
-  padding: 12px 12px 12px 0;
+  padding: 15px 4px;
   font-size: 14px;
   color: var(--k-text);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 /* Relacionar */

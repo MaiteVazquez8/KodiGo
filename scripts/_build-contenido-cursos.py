@@ -114,7 +114,7 @@ JS_PREGUNTAS = [
     ('30000000-0000-0000-0000-000000000013', 4, '¿Qué imprime este código? const saludo = "Hola"; console.log(saludo + ", Kodigo!");', 'seleccion',
      [('a', 'Hola, Kodigo!'), ('b', 'HolaKodigo!'), ('c', 'Hola, Kodigo')], 'a', 'La concatenación agrega el texto a la cadena.'),
     ('30000000-0000-0000-0000-000000000013', 5, '¿Qué imprime este código? console.log("JavaScri".length);', 'seleccion',
-     [('a', '7'), ('b', '8'), ('c', '6'), ('d', '9')], 'a', '"JavaScri" son 7 caracteres.'),
+     [('a', '7'), ('b', '8'), ('c', '6'), ('d', '9')], 'b', '"JavaScri" son 8 caracteres (J-a-v-a-S-c-r-i).'),
 
     ('30000000-0000-0000-0000-000000000014', 1, '¿Qué es un booleano en JavaScript?', 'seleccion',
      [('a', 'Un valor que es verdadero o falso (true/false).'), ('b', 'Un tipo de número decimal.'), ('c', 'Un texto entre comillas.')],
