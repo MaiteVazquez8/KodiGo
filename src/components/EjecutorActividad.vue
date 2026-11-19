@@ -301,6 +301,7 @@
       :corrigiendo="corrigiendo"
       :devolucion="devolucion"
       @programa="capturarPrograma($event)"
+      @fin-ejecucion="comprobarSiAntenaEncendida"
     />
 
     <transition name="fade">
@@ -314,6 +315,7 @@
     </transition>
 
     <button
+      v-if="tipo !== 'robot' || respuestaLockeada"
       type="button"
       class="k-btn k-btn--primary k-btn--block action-main"
       :disabled="!puedeAccionar"
@@ -959,6 +961,18 @@ function cuerpoRespuesta() {
     return respuesta
   }
   return null
+}
+
+// En el juego de lógica no existe el botón Comprobar: en cuanto el robot
+// enciende la antena (termina la ejecución completa sin chocar), la respuesta
+// se comroba sola contra el servidor. Si el robot se detiene antes o choca,
+// no se registra nada: la persona corrige tu programa y vuelve a Ejecutar.
+function comprobarSiAntenaEncendida() {
+  if (tipo.value !== 'robot') return
+  if (props.corrigiendo || bloqueado.value) return
+  if (respuestaLockeada.value) return
+  if (!robotPrograma.value.length) return
+  emit('comprobar', cuerpoRespuesta())
 }
 
 function accionPrincipal() {

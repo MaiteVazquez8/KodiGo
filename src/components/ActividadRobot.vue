@@ -8,7 +8,7 @@
     </div>
 
     <div class="lb-escena" aria-label="Tablero del nivel en perspectiva 3D">
-      <div class="lb-glow lb-glow-cyan" aria-hidden="true" />
+      <div class="lb-glow lb-glow-principal" aria-hidden="true" />
       <div class="lb-glow lb-glow-violeta" aria-hidden="true" />
       <div class="lb-tablero">
         <div
@@ -194,13 +194,22 @@ const props = defineProps({
   devolucion: { type: Object, default: null },
 })
 
-const emit = defineEmits(['programa'])
+const emit = defineEmits(['programa', 'fin-ejecucion'])
 
 function notificarPrograma() {
   emit('programa', { robot: [...secuencia.value], robotProc: [...procedimientoF.value] })
 }
 
 const TUTORIALES = {
+  'tutorial-avanzar': {
+    titulo: 'Conocé al robot: avanzar',
+    resumen: 'Avanzar es la primera y más básica instrucción: el robot da un paso hacia donde mira. A esta altura, el robot sólo entiende esta palabra.',
+    pasos: [
+      { titulo: 'El tablero', texto: 'La cuadrícula tiene casillas. La casilla de arranque está marcada con varios puntos y la meta es la antena brillante.' },
+      { titulo: 'La orientación', texto: 'La ventanita del robot muestra a dónde mira: ↑ → ↓ ←. Siempre avanza en esa dirección.' },
+      { titulo: 'Sólo avanzar', texto: 'En este nivel el robot todavía no entiende girar: sólo avanza recto. Tocá «Avanzar» las veces necesarias y pulsá Ejecutar.' },
+    ],
+  },
   'tutorial-robot': {
     titulo: 'Conocé al robot',
     resumen: 'Cada nivel tiene un tablero con casillas, un robot y un punto de partida. Tu trabajo: escribir el programa que hace que el robot encienda todas las baldosas y llegue a la antena.',
@@ -326,8 +335,12 @@ const tipoFeedback = ref('info')
 let temporizador = null
 let pasoActual = 0
 
-// Listado sobre el que estoy actuando según pestaña activa.
-const secuenciaActiva = computed(() => (modoPrograma.value === 'principal' ? secuencia : procedimientoF))
+// La pestaña activa determina sobre qué lista se escribe. Se devuelve el
+// array real (secuencia.value), no el ref: los scripts de este archivo
+// esperan un array y el plantilla lo consume tal cual.
+const secuenciaActiva = computed(() =>
+  modoPrograma.value === 'principal' ? secuencia.value : procedimientoF.value
+)
 const maxActivo = computed(() => (modoPrograma.value === 'principal' ? maxSecuencia.value : MAX_PROCEDIMIENTO))
 
 const editable = computed(() => !props.corrigiendo && !ejecutando.value && !props.devolucion)
@@ -408,7 +421,8 @@ function quitarUltima() {
 
 function borrarTodo() {
   if (!editable.value) return
-  secuenciaActiva.value = []
+  if (modoPrograma.value === 'principal') secuencia.value = []
+  else procedimientoF.value = []
   resetear()
   notificarPrograma()
 }
@@ -565,8 +579,9 @@ function ejecutar() {
     }
     ejecutando.value = false
     if (casilla.value === meta.value) {
-      mensaje.value = `¡Nivel completado en ${secuencia.value.length} instrucciones! Pulsá Comprobar para validar tu solución.`
+      mensaje.value = `¡Antena encendida en ${secuencia.value.length} instrucciones!`
       tipoFeedback.value = 'exito'
+      emit('fin-ejecucion')
     } else {
       mensaje.value = 'La antena sigue apagada. Faltó llegar a la meta.'
       tipoFeedback.value = 'error'
@@ -599,8 +614,9 @@ function finalizar() {
   clearInterval(temporizador)
   ejecutando.value = false
   if (casilla.value === meta.value) {
-    mensaje.value = `¡Antena encendida! Llegaste en ${secuencia.value.length} instrucciones. Pulsá Comprobar.`
+    mensaje.value = `¡Antena encendida! Llegaste en ${secuencia.value.length} instrucciones.`
     tipoFeedback.value = 'exito'
+    emit('fin-ejecucion')
   } else {
     mensaje.value = 'La antena sigue apagada. Probá una ruta que llegue a la meta.'
     tipoFeedback.value = 'error'
@@ -646,7 +662,7 @@ watch(() => props.pregunta?.id, () => {
   font-size: 11px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: #7dd3fc;
+  color: var(--k-accent);
   font-weight: 800;
 }
 
@@ -666,14 +682,14 @@ watch(() => props.pregunta?.id, () => {
 }
 
 .lb-chip-meta {
-  color: #7dd3fc;
-  border: 1px solid rgba(125, 211, 252, 0.4);
-  background: rgba(125, 211, 252, 0.08);
+  color: var(--k-accent);
+  border: 1px solid var(--k-accent-soft);
+  background: var(--k-accent-softer);
 }
 
 .lb-chip-icono {
-  color: #fde68a;
-  text-shadow: 0 0 8px rgba(253, 230, 138, 0.65);
+  color: var(--k-text);
+  text-shadow: 0 0 8px rgba(142, 5, 194, 0.9);
 }
 
 /* ---------- Escena con el tablero en perspectiva ---------- */
@@ -684,11 +700,11 @@ watch(() => props.pregunta?.id, () => {
   place-items: center;
   padding: 28px 12px 36px;
   border-radius: var(--k-radius);
-  border: 1px solid rgba(125, 211, 252, 0.15);
+  border: 1px solid var(--k-accent-soft);
   background:
-    radial-gradient(ellipse at 50% 120%, rgba(194, 65, 12, 0.25), transparent 60%),
-    radial-gradient(ellipse at 50% -40%, rgba(34, 211, 238, 0.28), transparent 60%),
-    linear-gradient(180deg, #1b1040 0%, #130c29 100%);
+    radial-gradient(ellipse at 50% 120%, rgba(62, 6, 95, 0.5), transparent 60%),
+    radial-gradient(ellipse at 50% -40%, rgba(112, 11, 151, 0.38), transparent 60%),
+    linear-gradient(180deg, var(--k-surface-2) 0%, var(--k-surface) 100%);
   overflow: hidden;
   perspective: 900px;
 }
@@ -703,8 +719,8 @@ watch(() => props.pregunta?.id, () => {
   pointer-events: none;
 }
 
-.lb-glow-cyan {
-  background: radial-gradient(circle, rgba(34, 211, 238, 0.35), transparent 70%);
+.lb-glow-principal {
+  background: radial-gradient(circle, rgba(142, 5, 194, 0.35), transparent 70%);
   top: -20%;
   left: -10%;
 }
@@ -734,12 +750,12 @@ watch(() => props.pregunta?.id, () => {
   display: grid;
   place-items: center;
   background:
-    linear-gradient(145deg, #3f2f68 0%, #2d2154 45%, #241a43 100%);
-  border: 1px solid rgba(148, 163, 184, 0.25);
+    linear-gradient(145deg, var(--k-surface-2) 0%, var(--k-surface) 55%, var(--k-bg) 100%);
+  border: 1px solid rgba(142, 5, 194, 0.22);
   box-shadow:
-    0 8px 0 #1b1233,
-    0 14px 18px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    0 8px 0 var(--k-bg),
+    0 14px 18px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
   transition: background 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
@@ -761,19 +777,19 @@ watch(() => props.pregunta?.id, () => {
 
 .lb-baldosa.es-energizada {
   background:
-    radial-gradient(circle at 50% 50%, rgba(34, 211, 238, 0.5), rgba(14, 116, 144, 0.55) 70%);
-  border-color: rgba(34, 211, 238, 0.6);
+    radial-gradient(circle at 50% 50%, rgba(142, 5, 194, 0.55), rgba(62, 6, 95, 0.6) 75%);
+  border-color: var(--k-accent);
   box-shadow:
-    0 8px 0 #083345,
+    0 8px 0 var(--k-surface),
     0 14px 18px rgba(0, 0, 0, 0.45),
-    inset 0 0 22px rgba(34, 211, 238, 0.5),
-    0 0 22px rgba(34, 211, 238, 0.35);
+    inset 0 0 22px rgba(142, 5, 194, 0.5),
+    0 0 22px rgba(142, 5, 194, 0.4);
 }
 
 .lb-baldosa.es-muro {
   background:
-    linear-gradient(145deg, #574a7a 0%, #453a63 45%, #382e52 100%);
-  border-color: rgba(148, 163, 184, 0.18);
+    linear-gradient(145deg, var(--k-surface-2) 0%, var(--k-surface) 100%);
+  border-color: rgba(142, 5, 194, 0.14);
 }
 
 .lb-muro {
@@ -781,26 +797,41 @@ watch(() => props.pregunta?.id, () => {
   height: 78%;
   border-radius: 8px;
   background:
-    linear-gradient(145deg, #6b5f92 0%, #544875 45%, #433a63 100%);
+    linear-gradient(145deg, var(--k-deep) 0%, var(--k-surface-2) 55%, var(--k-surface) 100%);
   box-shadow:
-    0 4px 0 #241c3d,
-    inset 0 2px 0 rgba(255, 255, 255, 0.22),
-    inset 0 -6px 8px rgba(0, 0, 0, 0.35);
+    0 4px 0 var(--k-bg),
+    inset 0 2px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -6px 8px rgba(0, 0, 0, 0.4);
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+
+/* X bien visible sobre el bloque para distinguirlo al instante */
+.lb-muro::after {
+  content: '✕';
+  font-family: var(--k-font);
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.6);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
 .lb-baldosa.es-meta {
-  border-color: rgba(253, 230, 138, 0.55);
+  border-color: var(--k-accent);
   background:
-    radial-gradient(circle at 50% 50%, rgba(253, 230, 138, 0.3), rgba(120, 53, 15, 0.5) 75%);
+    radial-gradient(circle at 50% 50%, rgba(142, 5, 194, 0.45), rgba(62, 6, 95, 0.55) 75%);
   box-shadow:
-    0 8px 0 #33240a,
+    0 8px 0 var(--k-surface),
     0 14px 18px rgba(0, 0, 0, 0.45),
-    inset 0 0 22px rgba(253, 230, 138, 0.35),
-    0 0 26px rgba(253, 230, 138, 0.3);
+    inset 0 0 22px rgba(142, 5, 194, 0.4),
+    0 0 26px rgba(142, 5, 194, 0.35);
 }
 
 .lb-baldosa.es-inicio {
-  background: linear-gradient(145deg, #3f2f68 0%, #2d2154 45%, #241a43 100%);
+  background:
+    linear-gradient(145deg, var(--k-surface-2) 0%, var(--k-surface) 55%, var(--k-bg) 100%);
 }
 
 .lb-baldosa.es-inicio .lb-baldosa-nucleo::after {
@@ -808,8 +839,8 @@ watch(() => props.pregunta?.id, () => {
   width: 34%;
   height: 34%;
   border-radius: 50%;
-  background: rgba(125, 211, 252, 0.18);
-  border: 2px dashed rgba(125, 211, 252, 0.5);
+  background: var(--k-accent-softer);
+  border: 2px dashed var(--k-accent-soft);
 }
 
 /* Antena de la meta, inspirada en LightBot */
@@ -825,10 +856,10 @@ watch(() => props.pregunta?.id, () => {
   width: 34%;
   height: 34%;
   border-radius: 50%;
-  background: radial-gradient(circle at 40% 35%, #fef9c3, #fde047 45%, #a16207 100%);
+  background: radial-gradient(circle at 40% 35%, #ffffff 0%, var(--k-accent) 48%, var(--k-deep) 100%);
   box-shadow:
-    0 0 10px rgba(253, 230, 138, 0.8),
-    0 0 26px rgba(253, 230, 138, 0.45);
+    0 0 10px rgba(142, 5, 194, 0.85),
+    0 0 26px rgba(142, 5, 194, 0.5);
 }
 
 .lb-antena-arco {
@@ -836,7 +867,7 @@ watch(() => props.pregunta?.id, () => {
   width: 78%;
   height: 78%;
   border-radius: 50%;
-  border: 3px solid rgba(253, 230, 138, 0.75);
+  border: 3px solid var(--k-accent);
   border-bottom-color: transparent;
   border-left-color: transparent;
   animation: lb-antena-gira 3s linear infinite;
@@ -875,10 +906,10 @@ watch(() => props.pregunta?.id, () => {
   height: 100%;
   border-radius: 22%;
   background:
-    linear-gradient(160deg, #f97316 0%, #ea580c 40%, #c2410c 100%);
-  border: 1.5px solid rgba(255, 255, 255, 0.22);
+    linear-gradient(160deg, #9d2ad8 0%, var(--k-accent) 45%, var(--k-mid) 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.28);
   box-shadow:
-    0 4px 0 #7c2d12,
+    0 4px 0 var(--k-deep),
     0 6px 14px rgba(0, 0, 0, 0.5),
     inset 0 2px 0 rgba(255, 255, 255, 0.35);
   display: grid;
@@ -901,17 +932,17 @@ watch(() => props.pregunta?.id, () => {
   width: 70%;
   height: 34%;
   border-radius: 999px;
-  background: #111827;
-  border: 1px solid rgba(125, 211, 252, 0.4);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.8), 0 0 8px rgba(34, 211, 238, 0.35);
+  background: var(--k-bg);
+  border: 1px solid var(--k-accent-soft);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.8), 0 0 8px rgba(142, 5, 194, 0.45);
 }
 
 .lb-robot-ojo {
   width: 18%;
   height: 62%;
   border-radius: 999px;
-  background: radial-gradient(circle at 35% 35%, #a5f3fc, #22d3ee 60%, #0e7490 100%);
-  box-shadow: 0 0 6px rgba(34, 211, 238, 0.9);
+  background: radial-gradient(circle at 35% 35%, #ffffff 0%, var(--k-accent) 60%, var(--k-deep) 100%);
+  box-shadow: 0 0 6px rgba(142, 5, 194, 0.9);
 }
 
 .lb-robot-raya {
@@ -929,7 +960,7 @@ watch(() => props.pregunta?.id, () => {
   width: 4px;
   height: 22%;
   border-radius: 999px;
-  background: #9a3412;
+  background: var(--k-deep);
 }
 
 .lb-robot-antena::after {
@@ -941,8 +972,8 @@ watch(() => props.pregunta?.id, () => {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: radial-gradient(circle, #fda4af, #e11d48 70%);
-  box-shadow: 0 0 6px rgba(225, 29, 72, 0.9);
+  background: radial-gradient(circle, #ffffff 0%, var(--k-accent) 75%);
+  box-shadow: 0 0 6px rgba(142, 5, 194, 0.9);
 }
 
 /* ---------- Panel táctil: paleta + casilleros ---------- */
@@ -960,9 +991,9 @@ watch(() => props.pregunta?.id, () => {
   gap: 8px;
   padding: 10px 8px;
   border-radius: 12px;
-  border: 1.5px solid rgba(125, 211, 252, 0.22);
-  background: #101a2e;
-  color: #93c5fd;
+  border: 1.5px solid var(--k-line);
+  background: var(--k-surface-2);
+  color: var(--k-text-2);
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -972,15 +1003,15 @@ watch(() => props.pregunta?.id, () => {
 }
 
 .lb-tab:hover {
-  border-color: rgba(34, 211, 238, 0.35);
-  color: #e0f2fe;
+  border-color: var(--k-accent-soft);
+  color: var(--k-text);
 }
 
 .lb-tab.activo {
-  border-color: rgba(34, 211, 238, 0.6);
-  background: rgba(34, 211, 238, 0.12);
-  color: #e0f2fe;
-  box-shadow: inset 0 2px 4px rgba(34, 211, 238, 0.12);
+  border-color: var(--k-accent);
+  background: var(--k-accent-softer);
+  color: var(--k-text);
+  box-shadow: inset 0 2px 4px rgba(142, 5, 194, 0.18);
 }
 
 .lb-tab-contador {
@@ -1008,23 +1039,23 @@ watch(() => props.pregunta?.id, () => {
   gap: 4px;
   padding: 10px 14px;
   border-radius: 14px;
-  border: 1.5px solid rgba(125, 211, 252, 0.3);
-  background: linear-gradient(160deg, #253154 0%, #1b2340 100%);
-  color: #e0f2fe;
+  border: 1.5px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(160deg, #9d2ad8 0%, var(--k-mid) 100%);
+  color: var(--k-text);
   cursor: pointer;
   transition: border-color 0.14s ease, transform 0.08s ease, box-shadow 0.18s ease;
-  box-shadow: 0 3px 0 #10172b;
+  box-shadow: 0 3px 0 var(--k-deep);
   -webkit-tap-highlight-color: transparent;
 }
 
 .lb-instruccion:hover:not(:disabled) {
-  border-color: rgba(34, 211, 238, 0.6);
-  box-shadow: 0 3px 0 #10172b, 0 0 16px rgba(34, 211, 238, 0.25);
+  border-color: var(--k-accent);
+  box-shadow: 0 3px 0 var(--k-deep), 0 0 16px rgba(142, 5, 194, 0.35);
 }
 
 .lb-instruccion:active:not(:disabled) {
   transform: translateY(2px);
-  box-shadow: 0 1px 0 #10172b;
+  box-shadow: 0 1px 0 var(--k-deep);
 }
 
 .lb-instruccion:disabled {
@@ -1035,7 +1066,7 @@ watch(() => props.pregunta?.id, () => {
 .lb-instruccion-simbolo {
   font-size: 26px;
   line-height: 1;
-  color: #7dd3fc;
+  color: var(--k-text);
 }
 
 .lb-instruccion-texto {
@@ -1049,8 +1080,8 @@ watch(() => props.pregunta?.id, () => {
   gap: 10px;
   padding: 12px;
   border-radius: var(--k-radius-sm);
-  border: 1px solid rgba(125, 211, 252, 0.18);
-  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid var(--k-accent-soft);
+  background: var(--k-surface-2);
 }
 
 .lb-ranura-cabecera {
@@ -1092,29 +1123,30 @@ watch(() => props.pregunta?.id, () => {
   width: 46px;
   height: 46px;
   border-radius: 12px;
-  border: 1.5px dashed rgba(125, 211, 252, 0.22);
-  background: #0b1220;
+  border: 1.5px dashed rgba(142, 5, 194, 0.3);
+  background: var(--k-surface);
   display: grid;
   place-items: center;
-  color: rgba(125, 211, 252, 0.32);
+  color: var(--k-text-3);
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease;
   -webkit-tap-highlight-color: transparent;
 }
 
 .lb-casillero.tiene-instruccion {
-  border-color: rgba(34, 211, 238, 0.45);
-  background: #12233a;
-  box-shadow: inset 0 2px 4px rgba(34, 211, 238, 0.12), 0 0 10px rgba(34, 211, 238, 0.16);
+  border-color: var(--k-accent);
+  background: var(--k-accent-softer);
+  box-shadow: inset 0 2px 4px rgba(142, 5, 194, 0.2), 0 0 10px rgba(142, 5, 194, 0.25);
 }
 
 .lb-casillero-simbolo {
   font-size: 24px;
   line-height: 1;
+  color: var(--k-text);
 }
 
 .lb-casillero-hueco {
-  color: rgba(125, 211, 252, 0.2);
+  color: var(--k-text-3);
   font-size: 20px;
 }
 
@@ -1140,26 +1172,27 @@ watch(() => props.pregunta?.id, () => {
 }
 
 .lb-boton--fantasma {
-  background: #1e293b;
-  color: #cbd5e1;
-  box-shadow: 0 3px 0 #0f172a;
+  background: var(--k-surface-2);
+  color: var(--k-text-2);
+  box-shadow: 0 3px 0 var(--k-deep);
+  border: 1px solid var(--k-line);
 }
 
 .lb-boton--fantasma:hover:not(:disabled) {
-  color: #f1f5f9;
+  color: var(--k-text);
 }
 
 .lb-boton--correr {
-  background: linear-gradient(160deg, #22d3ee 0%, #0891b2 100%);
-  color: #083344;
-  box-shadow: 0 4px 0 #155e75, 0 6px 16px rgba(34, 211, 238, 0.35);
+  background: linear-gradient(180deg, #9d2ad8 0%, #7f00c7 100%);
+  color: var(--k-text);
+  box-shadow: 0 4px 0 var(--k-deep), 0 6px 16px rgba(142, 5, 194, 0.4);
   padding-left: 16px;
   padding-right: 20px;
 }
 
 .lb-boton--correr:active:not(:disabled) {
   transform: translateY(2px);
-  box-shadow: 0 1px 0 #155e75;
+  box-shadow: 0 1px 0 var(--k-deep);
 }
 
 .lb-boton:disabled {
@@ -1180,21 +1213,21 @@ watch(() => props.pregunta?.id, () => {
 }
 
 .lb-feedback-exito {
-  border-color: rgba(34, 197, 94, 0.35);
-  background: rgba(34, 197, 94, 0.12);
-  color: #86efac;
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--k-success);
 }
 
 .lb-feedback-error {
-  border-color: rgba(248, 113, 113, 0.32);
-  background: rgba(248, 113, 113, 0.1);
-  color: #fca5a5;
+  border-color: rgba(255, 93, 115, 0.32);
+  background: rgba(255, 93, 115, 0.1);
+  color: var(--k-error);
 }
 
 .lb-feedback-info {
-  border-color: rgba(34, 211, 238, 0.3);
-  background: rgba(34, 211, 238, 0.08);
-  color: #bae6fd;
+  border-color: var(--k-accent-soft);
+  background: var(--k-accent-softer);
+  color: var(--k-text);
 }
 
 .lb-ayuda-boton {
@@ -1216,8 +1249,8 @@ watch(() => props.pregunta?.id, () => {
   gap: var(--k-space-2);
   padding: var(--k-space-4);
   border-radius: var(--k-radius-sm);
-  border: 1px dashed rgba(34, 211, 238, 0.3);
-  background: rgba(15, 23, 42, 0.65);
+  border: 1px dashed var(--k-accent-soft);
+  background: var(--k-surface-2);
   font-size: 13px;
   color: var(--k-text-2);
   line-height: 1.5;
@@ -1225,7 +1258,7 @@ watch(() => props.pregunta?.id, () => {
 
 .lb-ayuda-titulo {
   font-weight: 800;
-  color: #7dd3fc;
+  color: var(--k-accent);
   text-transform: uppercase;
   font-size: 11px;
   letter-spacing: 0.07em;
@@ -1254,8 +1287,8 @@ watch(() => props.pregunta?.id, () => {
   gap: var(--k-space-3);
   padding: var(--k-space-4) var(--k-space-5);
   border-radius: var(--k-radius);
-  background: #0f2137;
-  border: 1px solid rgba(34, 211, 238, 0.3);
+  background: var(--k-surface-2);
+  border: 1px solid var(--k-accent-soft);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
 }
 
@@ -1275,7 +1308,7 @@ watch(() => props.pregunta?.id, () => {
   font-size: 10px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: #7dd3fc;
+  color: var(--k-accent);
   font-weight: 800;
 }
 
@@ -1314,8 +1347,8 @@ watch(() => props.pregunta?.id, () => {
 }
 
 .lb-tutorial-paso.activo .lb-tutorial-boton {
-  border-color: rgba(34, 211, 238, 0.45);
-  background: rgba(34, 211, 238, 0.1);
+  border-color: var(--k-accent);
+  background: var(--k-accent-softer);
 }
 
 .lb-tutorial-indice {
@@ -1324,8 +1357,8 @@ watch(() => props.pregunta?.id, () => {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: rgba(34, 211, 238, 0.15);
-  color: #7dd3fc;
+  background: var(--k-accent-softer);
+  color: var(--k-accent);
   font-size: 12px;
   font-weight: 800;
 }
