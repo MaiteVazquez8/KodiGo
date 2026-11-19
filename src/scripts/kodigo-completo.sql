@@ -4036,7 +4036,7 @@ begin
 
     v_puntos := case
         when v_correcta = p_opcion_id
-        then (v_partida.config_snapshot -> 'desafio' ->> 'puntos_por_correcta')::integer
+        then coalesce((v_partida.config_snapshot -> 'desafio' ->> 'puntos_por_correcta')::integer, 0)
         else 0
     end;
 
