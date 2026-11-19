@@ -20,6 +20,70 @@ function aNumero(valor, defecto = 0) {
   return Number.isFinite(n) ? n : defecto
 }
 
+// ---------------------------------------------------------------------------
+// Panel del desafio y ranking ExpoTecnica
+// ---------------------------------------------------------------------------
+
+export async function cambiarEstadoPartida(partidaId, deshabilitar) {
+  const { data, error } = await supabase.rpc('expotec_admin_cambiar_estado_partida', {
+    p_partida_id: partidaId,
+    p_deshabilitar: Boolean(deshabilitar),
+  })
+  if (error) throw errorDe('expotec_admin_cambiar_estado_partida', error)
+  return data
+}
+
+export async function reiniciarRanking(eventoId) {
+  const { data, error } = await supabase.rpc('expotec_admin_reiniciar_ranking', {
+    p_evento_id: eventoId,
+  })
+  if (error) throw errorDe('expotec_admin_reiniciar_ranking', error)
+  return aNumero(data)
+}
+
+export async function rehabilitarRanking(eventoId) {
+  const { data, error } = await supabase.rpc('expotec_admin_rehabilitar_ranking', {
+    p_evento_id: eventoId,
+  })
+  if (error) throw errorDe('expotec_admin_rehabilitar_ranking', error)
+  return aNumero(data)
+}
+
+export async function renombrarAlias(partidaId, nuevoAlias) {
+  const { data, error } = await supabase.rpc('expotec_admin_renombrar_alias', {
+    p_partida_id: partidaId,
+    p_nuevo_alias: nuevoAlias,
+  })
+  if (error) throw errorDe('expotec_admin_renombrar_alias', error)
+  return data
+}
+
+export async function renombrarPerfil(usuarioId, nombre) {
+  const { data, error } = await supabase.rpc('expotec_admin_renombrar_perfil', {
+    p_usuario_id: usuarioId,
+    p_nombre: nombre,
+  })
+  if (error) throw errorDe('expotec_admin_renombrar_perfil', error)
+  return Boolean(data)
+}
+
+export async function listarUsuarios(busqueda = '', limite = 50) {
+  const { data, error } = await supabase.rpc('expotec_admin_lista_usuarios', {
+    p_busqueda: busqueda ?? '',
+    p_limite: limite,
+  })
+  if (error) throw errorDe('expotec_admin_lista_usuarios', error)
+  return (data ?? []).map((f) => ({
+    usuarioId: f.usuario_id,
+    nombreUsuario: f.nombre_usuario ?? '',
+    nombreVisible: f.nombre_visible ?? '',
+    nivel: aNumero(f.nivel),
+    experiencia: aNumero(f.experiencia),
+    rachaDias: aNumero(f.racha_dias),
+    createdAt: f.created_at,
+  }))
+}
+
 export async function esAdmin() {
   const { data, error } = await supabase.rpc('expotec_admin_es_admin')
   if (error) throw errorDe('expotec_admin_es_admin', error)
