@@ -47,10 +47,72 @@ test('hay exactamente 15 actividades de tipo robot, una por leccion', () => {
 // 2. Validacion en el lado servidor
 // ---------------------------------------------------------------------------
 
-test('comprobar_respuesta tiene una rama para robot con expansion de bucles', () => {
+test('el nivel de salto "El primer salto" esta sembrado con el salto y su tutorial', () => {
+  const pregunta = sentencias.find((s) => s.includes('a6556a96-a6a0-8878-c6d0-583f40dc6a4b'))
+  assert.ok(pregunta, 'debe existir la pregunta de la leccion "El primer salto"')
+  assert.match(pregunta, /"instrucciones": \["avanzar", "izquierda", "derecha", "saltar"\]/)
+  assert.match(pregunta, /"tutorial": "tutorial-salto"/)
+  assert.match(pregunta, /"inicio": 22/)
+  assert.match(pregunta, /"meta": 2/)
+})
+
+test('los niveles avanzados permiten usar el salto como herramienta (L6, L7, L10, L14, L15)', () => {
+  const ids = [
+    'e36f60a9-6a34-8d26-6034-c95b3029ea3d',
+    'ef09b43d-fb5b-85a1-fdd2-de9e174b2b5d',
+    'b1de3c13-55b4-d8f8-873a-9dac4f97a487',
+    'e4e9c827-7d64-9c8c-dd14-7acde3806ff6',
+    'b2085b3e-b6f0-b13e-7780-c864e30047dd',
+  ]
+  for (const id of ids) {
+    const pregunta = sentencias.find((s) => s.includes(id))
+    assert.ok(pregunta, `debe existir la pregunta ${id.slice(0, 8)}`)
+    assert.match(pregunta, /"saltar"/, `${id.slice(0, 8)} debe habilitar el salto`)
+  }
+})
+
+test('el RPC soporta bucles de bloque y procedimientos mediante _robot_expandir', () => {
+  assert.match(SQL, /create or replace function _robot_expandir\(/)
+  assert.match(SQL, /create or replace function _robot_expandir_recursivo\(/)
+  // El helper expande: repetir ×3, llamar F y bucleN..fin
+  assert.match(SQL, /\^bucle\[0-9\]\+\$/)
+  assert.match(SQL, /elsif v_inst = 'llamar' then/)
+  assert.match(SQL, /(if|elsif) v_inst = 'repetir' then/)
+  // Una vez expandido, comprobar_respuesta ejecuta el resultado
+  assert.match(SQL, /v_expanded := _robot_expandir\(v_respuesta, v_proc\)/)
+})
+
+test('los niveles L5, L11, L12, L13, L14, L15 habilitan llamar/bucle/fin en el panel', () => {
+  const ids = [
+    '74f851fb-8567-ac96-cd53-01d96d883425', // L5 Tres bloqueos
+    'acdb920b-7e50-965d-a0b3-b491a14acb33', // L11 Repetir instrucciones
+    'c1df8d57-3806-6140-2442-4927dfeb3710', // L12 Secuencias eficientes
+    'e00bbbb9-5c28-3998-0cf1-835fe4c84412', // L13 Tomar decisiones
+    'e4e9c827-7d64-9c8c-dd14-7acde3806ff6', // L14 Si sucede esto...
+    'b2085b3e-b6f0-b13e-7780-c864e30047dd', // L15 Desafío final
+  ]
+  for (const id of ids) {
+    const pregunta = sentencias.find((s) => s.includes(id))
+    assert.ok(pregunta, `debe existir la pregunta ${id.slice(0, 8)}`)
+    assert.match(pregunta, /"llamar"/, `${id.slice(0, 8)} debe habilitar llamar`)
+    assert.match(pregunta, /"bucle3"/, `${id.slice(0, 8)} debe habilitar bucle3`)
+    assert.match(pregunta, /"fin"/, `${id.slice(0, 8)} debe habilitar fin`)
+  }
+})
+
+test('los niveles L12 y L15 muestran el tutorial de procedimientos', () => {
+  const l12 = sentencias.find((s) => s.includes('c1df8d57-3806-6140-2442-4927dfeb3710'))
+  const l15 = sentencias.find((s) => s.includes('b2085b3e-b6f0-b13e-7780-c864e30047dd'))
+  assert.match(l12, /"tutorial": "tutorial-procedimientos"/)
+  assert.match(l15, /"tutorial": "tutorial-procedimientos"/)
+})
+
+test('comprobar_respuesta tiene una rama para robot con expansion de bucles y salto', () => {
   assert.match(SQL, /elsif v_tipo = 'robot' then/)
   assert.match(SQL, /v_expanded/)
   assert.match(SQL, /'repetir'/)
+  assert.match(SQL, /elsif v_instr = 'saltar' then/)
+  assert.match(SQL, /floor\(v_pos \/ 5\) \+ 2 \* case v_rumbo/)
 })
 
 test('el constraint preguntas_tipo_check incluye robot', () => {
@@ -109,6 +171,12 @@ const resolver = (p) => {
         if (fila < 0 || fila > 4 || col < 0 || col > 4) continue
         np = fila * 5 + col
         if (bloqueados.has(np)) continue
+      } else if (inst === 'saltar') {
+        const fila = Math.floor(pos / 5) + DIRS[rd][0] * 2
+        const col = (pos % 5) + DIRS[rd][1] * 2
+        if (fila < 0 || fila > 4 || col < 0 || col > 4) continue
+        np = fila * 5 + col
+        if (bloqueados.has(np)) continue
       } else if (inst === 'repetir') continue
       cola.push([np, nr, [...seq, inst]])
     }
@@ -123,6 +191,13 @@ const resolver = (p) => {
           else if (inst === 'avanzar') {
             const fila = Math.floor(np / 5) + DIRS[nr][0]
             const col = (np % 5) + DIRS[nr][1]
+            if (fila < 0 || fila > 4 || col < 0 || col > 4) { ok = false; break }
+            const sig = fila * 5 + col
+            if (bloqueados.has(sig)) { ok = false; break }
+            np = sig
+          } else if (inst === 'saltar') {
+            const fila = Math.floor(np / 5) + DIRS[nr][0] * 2
+            const col = (np % 5) + DIRS[nr][1] * 2
             if (fila < 0 || fila > 4 || col < 0 || col > 4) { ok = false; break }
             const sig = fila * 5 + col
             if (bloqueados.has(sig)) { ok = false; break }

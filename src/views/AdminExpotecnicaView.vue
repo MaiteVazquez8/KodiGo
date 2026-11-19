@@ -1438,7 +1438,7 @@ function armarActividad() {
       meta: actividadForm.meta,
       muros,
     }
-    datos.instrucciones = ['avanzar', 'izquierda', 'derecha', 'repetir']
+    datos.instrucciones = ['avanzar', 'izquierda', 'derecha', 'saltar', 'repetir', 'llamar', 'bucle2', 'bucle3', 'bucle4', 'bucle5', 'fin']
     datos.maxInstrucciones = Math.min(30, Math.max(1, Number(actividadForm.maxInstrucciones) || 30))
     datos.objetivo = actividadForm.objetivo.trim() || 'Llegá a la estrella.'
     if (actividadForm.ejemplo.trim()) datos.ejemplo = actividadForm.ejemplo.trim()

@@ -300,7 +300,7 @@
       :pregunta="pregunta"
       :corrigiendo="corrigiendo"
       :devolucion="devolucion"
-      @programa="robotPrograma = $event?.robot ?? []"
+      @programa="capturarPrograma($event)"
     />
 
     <transition name="fade">
@@ -619,6 +619,12 @@ const candidatos = computed(() =>
 
 const refsBlancos = ref([])
 const robotPrograma = ref([])
+const robotProcedimiento = ref([])
+
+function capturarPrograma(programa) {
+  robotPrograma.value = Array.isArray(programa?.robot) ? programa.robot : []
+  robotProcedimiento.value = Array.isArray(programa?.robotProc) ? programa.robotProc : []
+}
 
 function registrarRefBlanco(el) {
   if (el) refsBlancos.value.push(el)
@@ -646,6 +652,7 @@ watch(
     ejecutandoVista.value = false
     bloquesElegidos.value = []
     robotPrograma.value = []
+    robotProcedimiento.value = []
     ordenElementos.value = mezclarConSemilla(
       opciones.value.map((o) => o.id),
       'orden',
@@ -945,7 +952,11 @@ function cuerpoRespuesta() {
     return { bloques: bloquesElegidos.value.map((bloque) => bloque.id) }
   }
   if (tipo.value === 'robot') {
-    return { robot: [...robotPrograma.value] }
+    const respuesta = { robot: [...robotPrograma.value] }
+    if (robotProcedimiento.value.length) {
+      respuesta.robotProc = [...robotProcedimiento.value]
+    }
+    return respuesta
   }
   return null
 }
