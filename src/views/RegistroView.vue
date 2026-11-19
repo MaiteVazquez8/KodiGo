@@ -21,7 +21,7 @@
           @submit.prevent="enviarRegistro"
         >
           <button type="button" class="registro-volver-enlace" @click="irAlAcceso">
-            <q-icon name="arrow_back" size="18px" />
+            <IconoArrowLeft :size="18" />
             Volver
           </button>
 
@@ -88,9 +88,13 @@
           <FantasmaKodigo variant="happy" :size="88" />
           <p class="registro-titulo k-h1">Verificá tu correo</p>
           <p class="registro-subtitulo">
-            Enviamos un enlace y un código de verificación a
-            <strong class="k-mono">{{ correoEnUso }}</strong
-            >. Abrí el enlace del correo o ingresá el código de 6 dígitos.
+            Enviamos un correo a
+            <strong class="k-mono">{{ correoEnUso }}</strong>. Abrí el enlace que trae
+            para verificar, o ingresá el código que viene en el correo.
+          </p>
+          <p class="registro-alias">
+            ¿No llegó? Revisá la carpeta de spam/correo masivo. El remitente es
+            <strong>Kodigo</strong> desde el servidor de Supabase.
           </p>
           <p v-if="aliasReservado" class="registro-alias">
             Tu nombre de usuario en Kodigo será
@@ -118,10 +122,21 @@
           <button
             type="button"
             class="k-btn k-btn--ghost k-btn--block"
-            :disabled="enviando"
+            :disabled="enviando || reenviando"
             @click="yaVerifique"
           >
             Ya abrí el enlace de verificación
+          </button>
+
+          <button
+            type="button"
+            class="k-btn k-btn--ghost k-btn--block"
+            :disabled="reenviando || enviando"
+            @click="reenviarCorreo"
+          >
+            <q-spinner v-if="reenviando" size="17px" class="on-left" color="currentColor" />
+            <q-icon v-else name="mail_outline" size="19px" class="on-left" />
+            {{ reenviando ? 'REENVIANDO…' : 'REENVIAR CORREO' }}
           </button>
 
           <button
@@ -219,11 +234,13 @@ import { useRouter } from 'vue-router'
 import CampoFormulario from '@/components/CampoFormulario.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import FantasmaKodigo from '@/components/FantasmaKodigo.vue'
+import IconoArrowLeft from '@/components/IconoArrowLeft.vue'
 import {
   correoVerificado,
   crearCuenta,
   esInvitado,
   establecerContrasena,
+  reenviarVerificacion,
   usarAuth,
   validarContrasena,
   validarCorreo,
@@ -239,6 +256,8 @@ const tieneCuenta = computed(() => Boolean(estado.usuario) && !esInvitado(estado
 
 const paso = ref('formulario')
 const enviando = ref(false)
+const reenviando = ref(false)
+const viaVerificacion = ref('registro')
 const formulario = ref({ nombre: '', correo: '', contrasena: '' })
 const correoEnUso = ref('')
 const aliasReservado = ref('')
@@ -285,6 +304,7 @@ async function enviarRegistro() {
     })
     correoEnUso.value = resultado.correo || formulario.value.correo.trim()
     aliasReservado.value = resultado.alias || ''
+    viaVerificacion.value = resultado.via || 'registro'
 
     if (resultado.via === 'registro') {
       paso.value = resultado.requiereConfirmacionCorreo ? 'confirmacion' : 'listo'
@@ -327,6 +347,21 @@ async function yaVerifique() {
     }
   } finally {
     enviando.value = false
+  }
+}
+
+async function reenviarCorreo() {
+  errorGeneral.value = ''
+  reenviando.value = true
+  try {
+    await reenviarVerificacion({ correo: correoEnUso.value, via: viaVerificacion.value })
+    errorGeneral.value = 'Te reenviamos el correo con el enlace/código. Revisá también spam.'
+  } catch (error) {
+    errorGeneral.value = `No pudimos reenviar el correo: ${
+      error.message || 'error desconocido'
+    }`
+  } finally {
+    reenviando.value = false
   }
 }
 

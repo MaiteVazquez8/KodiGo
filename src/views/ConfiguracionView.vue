@@ -5,7 +5,7 @@
 
       <template v-else>
         <button type="button" class="configuracion-volver" @click="volver">
-          <q-icon name="arrow_back" size="18px" />
+          <IconoArrowLeft :size="18" />
         </button>
 
         <p class="configuracion-titulo k-h1">Configuración</p>
@@ -56,6 +56,7 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
+import IconoArrowLeft from '@/components/IconoArrowLeft.vue'
 import { cerrarSesion, esInvitado, usarAuth } from '@/services/auth'
 
 const router = useRouter()

@@ -20,7 +20,7 @@ const unidadesDesbloqueadas = new Map()
 
 const PREFIJO_CLAVE_INTENTO = 'kodigo.intento.'
 
-export const FRACCION_MINIMA_PARA_APROBAR = 2 / 3
+export const FRACCION_MINIMA_PARA_APROBAR = 1 / 2
 
 // CORRECTAS_MINIMAS_PARA_APROBAR ya no basta: la regla general es un 2/3 de
 // las preguntas correctas, con redondeo hacia arriba (3 -> 2, 4 -> 3,
@@ -425,7 +425,7 @@ function mapearPregunta(fila, opciones) {
 
 function estadoPorIntento(leccionId) {
   const intento = obtenerIntentoLeccion(leccionId)
-  if (!intento || !intento.completado) return 'disponible'
+  if (!intento || !intento.completada) return 'disponible'
   return intento.aprobada ? 'aprobada' : 'completada'
 }
 

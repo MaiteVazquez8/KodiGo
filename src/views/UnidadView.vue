@@ -24,7 +24,7 @@
       <template v-else-if="estadoCarga === 'listo' && unidad">
         <div class="unit-barra">
           <button type="button" class="unit-boton-volver" aria-label="Volver" @click="volver">
-            <q-icon name="arrow_back" size="20px" />
+            <IconoArrowLeft :size="20" />
           </button>
           <span class="unit-racha" aria-label="Racha actual">
             <q-icon name="local_fire_department" size="17px" />
@@ -51,10 +51,10 @@
           v-if="primeraDisponible && unidad.estado !== 'bloqueada'"
           type="button"
           class="k-btn k-btn--primary k-btn--block unit-cta"
-          :aria-label="hayCompletadas ? 'Comenzar la próxima clase' : 'Comenzar la primera clase'"
+          :aria-label="todasVistas ? 'Repasar las clases de esta unidad' : hayCompletadas ? 'Comenzar la próxima clase' : 'Comenzar la primera clase'"
           @click="abrirLeccion(primeraDisponible)"
         >
-          {{ hayCompletadas ? 'COMENZAR SIGUIENTE CLASE' : 'COMENZAR PRIMERA CLASE' }}
+          {{ todasVistas ? 'REPASAR CAMINO' : hayCompletadas ? 'COMENZAR SIGUIENTE CLASE' : 'COMENZAR PRIMERA CLASE' }}
         </button>
       </template>
     </main>
@@ -66,6 +66,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import CaminoUnidad from '@/components/CaminoUnidad.vue'
+import IconoArrowLeft from '@/components/IconoArrowLeft.vue'
 import {
   aSlug,
   obtenerLecciones,
@@ -92,6 +93,12 @@ const hayCompletadas = computed(() =>
   lecciones.value.some((l) => ['completada', 'aprobada'].includes(l.estado)),
 )
 
+const todasVistas = computed(
+  () =>
+    lecciones.value.length > 0 &&
+    lecciones.value.every((l) => ['completada', 'aprobada'].includes(l.estado)),
+)
+
 const linkCurso = computed(() =>
   curso.value ? { name: 'curso', params: { curso: aSlug(curso.value.nombre) } } : { name: 'learn' },
 )
@@ -107,8 +114,15 @@ const mensajeGuida = computed(() => {
   return 'Seguí el camino: la próxima clase es la tuya.'
 })
 
+// El CTA quiere decir "siguiente clase pendiente". Si la lección 1 ya está
+// aprobada, abrirla de nuevo sería un paso atrás: se prefiere la primera
+// lección disponible (no completada ni bloqueada) y, si no hay ninguna, se
+// cae a cualquier no bloqueada para repasar.
 const primeraDisponible = computed(
-  () => lecciones.value.find((l) => l.estado !== 'bloqueada') ?? null,
+  () =>
+    lecciones.value.find((l) => l.estado === 'disponible') ??
+    lecciones.value.find((l) => l.estado !== 'bloqueada') ??
+    null,
 )
 
 async function cargar() {

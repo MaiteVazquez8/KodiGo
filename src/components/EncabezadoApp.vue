@@ -13,7 +13,7 @@
       </button>
 
       <button v-else type="button" class="back-button" aria-label="Volver" @click="volverAtras">
-        <q-icon name="arrow_back" size="20px" />
+        <IconoArrowLeft :size="20" />
       </button>
 
       <h1 class="app-header-title">
@@ -29,6 +29,7 @@
 <script setup>
 import { useRouter } from 'vue-router'
 import FantasmaKodigo from './FantasmaKodigo.vue'
+import IconoArrowLeft from './IconoArrowLeft.vue'
 
 const props = defineProps({
   titulo: {

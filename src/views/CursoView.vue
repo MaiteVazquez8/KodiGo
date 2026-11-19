@@ -24,7 +24,7 @@
       <template v-else-if="estadoCarga === 'listo' && curso">
         <div class="curso-cabecera">
           <button type="button" class="curso-boton-volver" aria-label="Volver" @click="volver">
-            <q-icon name="arrow_back" size="20px" />
+            <IconoArrowLeft :size="20" />
           </button>
           <h1 class="curso-titulo">Detalle: {{ curso.nombre }}</h1>
           <span class="curso-racha">
@@ -53,7 +53,7 @@
         <section v-if="esCursoJavaScript && desafioActivo" class="curso-bloque curso-desafio">
           <p class="curso-bloque-titulo">Evento Especial</p>
           <button type="button" class="k-btn k-btn--primary k-btn--block" @click="irAlDesafio">
-            <q-icon name="emoji_events" size="18px" />
+            <img src="/logoTec.png" alt="ExpoTécnica" width="22" height="22" class="curso-desafio-logo" />
             Ir al Desafío ExpoTécnica
           </button>
         </section>
@@ -135,6 +135,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import LogoCurso from '@/components/LogoCurso.vue'
+import IconoArrowLeft from '@/components/IconoArrowLeft.vue'
 import { aSlug, obtenerUnidades, resolverCurso, rutaUnidad } from '@/services/catalogo'
 import { estado as estadoAuth } from '@/services/auth'
 import { obtenerEventoActivo } from '@/services/expotecnica'
@@ -513,5 +514,14 @@ function verCursos() {
 /* Bloque del Desafio ExpoTecnica: mismo ritmo, borde con acento violeta */
 .curso-desafio .k-btn {
   border: 1px solid rgba(142, 5, 194, 0.5);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+}
+
+.curso-desafio-logo {
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 </style>

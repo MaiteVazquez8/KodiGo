@@ -123,7 +123,7 @@ test('cada leccion tiene la cantidad de actividades que pide su dificultad', () 
   }
 
   const total = Object.values(porLeccion).reduce((a, b) => a + b, 0)
-  assert.equal(total, 53, 'JavaScript suma 53 actividades')
+  assert.equal(total, 53, 'JavaScript suma 53 actividades (las originales con marca js:lXX:aYY)')
 })
 
 test('los seis tipos de actividad estan en la curricula', () => {

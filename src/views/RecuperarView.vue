@@ -13,9 +13,23 @@
           <p class="recuperar-detalle">
             Si existe una cuenta con
             <strong class="k-mono">{{ correo }}</strong
-            >, te enviamos un enlace para restablecer tu contraseña.
+            >, te enviamos un enlace para restablecer tu contraseña. El enlace vence en unos
+            minutos: si lo perdés, pedí uno nuevo.
           </p>
-          <RouterLink to="/acceso/ingreso" class="k-btn k-btn--ghost k-btn--block recuperar-volver">
+          <p v-if="!errorGeneral" class="recuperar-pista">¿No llegó? Revisá la carpeta de spam.</p>
+
+          <button
+            type="button"
+            class="k-btn k-btn--ghost k-btn--block recuperar-volver"
+            :disabled="reenviando"
+            @click="reenviarEnlace"
+          >
+            <q-spinner v-if="reenviando" size="17px" class="on-left" color="currentColor" />
+            <q-icon v-else name="mail_outline" size="19px" class="on-left" />
+            {{ reenviando ? 'REENVIANDO…' : 'Reenviar enlace' }}
+          </button>
+
+          <RouterLink to="/acceso/ingreso" class="k-btn k-btn--primary k-btn--block recuperar-volver">
             Volver a iniciar sesión
           </RouterLink>
         </section>
@@ -65,6 +79,7 @@ const { estado } = usarAuth()
 
 const correo = ref('')
 const enviando = ref(false)
+const reenviando = ref(false)
 const enviado = ref(false)
 const errorCorreo = ref('')
 const errorGeneral = ref('')
@@ -87,6 +102,19 @@ async function enviarEnlace() {
     errorGeneral.value = error.message
   } finally {
     enviando.value = false
+  }
+}
+
+async function reenviarEnlace() {
+  errorGeneral.value = ''
+  reenviando.value = true
+  try {
+    await recuperarContrasena({ correo: correo.value })
+    // Same call, new mail. If the previous email had expired the new one works.
+  } catch (error) {
+    errorGeneral.value = error.message
+  } finally {
+    reenviando.value = false
   }
 }
 </script>
@@ -139,8 +167,15 @@ async function enviarEnlace() {
 }
 
 .recuperar-volver {
-  margin-top: var(--k-space-6);
+  margin-top: var(--k-space-4);
   text-decoration: none;
+}
+
+.recuperar-pista {
+  margin-top: var(--k-space-2);
+  font-size: 12px;
+  color: var(--k-text-3);
+  text-align: center;
 }
 
 .k-mono {

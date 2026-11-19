@@ -24,7 +24,7 @@
       <template v-else-if="estado === 'listo' && leccion && unidad">
         <div class="lesson-cabecera">
           <button type="button" class="lesson-boton-volver" aria-label="Volver" @click="volver">
-            <q-icon name="arrow_back" size="20px" />
+            <IconoArrowLeft :size="20" />
           </button>
           <h1 class="lesson-titulo-cabecera">{{ leccion.titulo }}</h1>
           <span class="lesson-racha">
@@ -103,6 +103,7 @@ import BloqueCodigo from '@/components/BloqueCodigo.vue'
 import BurbujaFantasma from '@/components/BurbujaFantasma.vue'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
 import LogoCurso from '@/components/LogoCurso.vue'
+import IconoArrowLeft from '@/components/IconoArrowLeft.vue'
 import {
   obtenerCurso,
   obtenerLeccion,

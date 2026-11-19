@@ -72,7 +72,7 @@
           >
             <span class="acceso-desafio-icono">
               <q-spinner v-if="entrandoDesafio" size="22px" color="currentColor" />
-              <q-icon v-else name="emoji_events" size="22px" />
+              <img v-else src="/logoTec.png" alt="ExpoTécnica" width="24" height="24" />
             </span>
             <span class="acceso-desafio-texto">
               <span class="acceso-desafio-titulo">Desafío ExpoTécnica</span>

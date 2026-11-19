@@ -56,7 +56,7 @@
               <p class="continuar-titulo">Desafío ExpoTécnica</p>
               <p class="continuar-subtitulo">{{ lemaDesafio }}</p>
             </div>
-            <q-icon name="emoji_events" size="22px" class="continuar-play" />
+            <img src="/logoTec.png" alt="ExpoTécnica" width="40" height="40" class="tarjeta-logo-tecn" />
           </button>
         </section>
 
@@ -311,6 +311,12 @@ function abrirCurso(curso) {
 
 .continuar-logo {
   flex-shrink: 0;
+}
+
+.tarjeta-logo-tecn {
+  margin-left: auto;
+  flex-shrink: 0;
+  border-radius: 50%;
 }
 
 .continuar-datos {

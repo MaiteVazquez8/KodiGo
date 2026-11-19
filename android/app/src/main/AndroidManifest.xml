@@ -18,6 +18,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Deep link para restablecer contraseña y verificación de correo. -->
+            <intent-filter android:autoVerify="true" android:order="2">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="kodigo" android:host="restablecer" />
+                <data android:scheme="kodigo" android:host="verificar" />
+            </intent-filter>
         </activity>
 
         <provider

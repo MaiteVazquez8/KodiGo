@@ -67,16 +67,26 @@ test('las RPC de escritura solo se conceden a authenticated', () => {
   }
 })
 
-test('la regla de aprobacion es 2/3 con redondeo hacia arriba y vive en el servidor', () => {
+test('estadoPorIntento lee la clave completada que mapea la hidratacion', () => {
+  // progresoPorLeccion guarda { completada, aprobada, ... } (ver mapearProgreso).
+  // Un rename productivo de esa clave rompió el mapa: siempre mostró "disponible".
+  const codigo = readFileSync(CATALOGO, 'utf8')
+  const bloque = codigo.match(/function estadoPorIntento[\s\S]*?\n}/)
+  assert.ok(bloque, 'debe existir estadoPorIntento')
+  assert.match(bloque[0], /intento\.completada/, 'debe leer intento.completada')
+  assert.doesNotMatch(bloque[0], /intento\.completado\b/, 'no puede leer la clave inexistente .completado')
+})
+
+test('la regla de aprobacion es 1/2 con redondeo hacia arriba y vive en el servidor', () => {
   const texto = cuerpo('recalcular_intento')
-  assert.match(texto, /v_correctas >= ceiling\(v_total::numeric \* 2 \/ 3\)/, 'debe usar el techo de 2/3')
+  assert.match(texto, /v_correctas >= ceiling\(v_total::numeric \* 1 \/ 2\)/, 'debe usar el techo de 1/2')
   // El porcentaje nunca decide la aprobacion.
   assert.match(texto, /completado and v_correctas >= ceiling/)
 })
 
 test('la regla del servidor coincide con la constante del cliente', () => {
   const codigo = readFileSync(CATALOGO, 'utf8')
-  const match = codigo.match(/FRACCION_MINIMA_PARA_APROBAR\s*=\s*2\s*\/\s*3/)
+  const match = codigo.match(/FRACCION_MINIMA_PARA_APROBAR\s*=\s*1\s*\/\s*2/)
   assert.ok(match, 'el cliente debe exportar FRACCION_MINIMA_PARA_APROBAR')
   assert.match(codigo, /correctas >= Math\.ceil\(total \* FRACCION_MINIMA_PARA_APROBAR\)/)
 })

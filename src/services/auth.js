@@ -342,6 +342,18 @@ export async function verificarCorreoCuenta({ correo, codigo }) {
   await refrescarSesion()
 }
 
+export async function reenviarVerificacion({ correo, via }) {
+  // Reenvía el correo de verificación. En usuarios invitados que se están
+  // convirtiendo a cuenta real el tipo es 'email_change'; en signUp directo
+  // el tipo es 'signup'. Si el proyecto no envía por rate limiting o por
+  // plantilla, devolvemos un mensaje legible al caller.
+  const email = String(correo ?? '').trim()
+  if (!validarCorreo(email).valido) throw new Error('Correo inválido.')
+  const tipo = via === 'conversion' ? 'email_change' : 'signup'
+  const { error } = await supabase.auth.resend({ type: tipo, email })
+  if (error) throw traducirError(error)
+}
+
 export async function correoVerificado() {
   try {
     const { data } = await supabase.auth.getUser()
@@ -349,10 +361,13 @@ export async function correoVerificado() {
     if (!u) return false
     estado.usuario = u
     await cargarPerfil(u.id)
-    const tieneCorreo = Boolean(u.email)
-    const confirmado = Boolean(u.email_confirmed_at)
+    // La única señal clara de que el correo quedó verificado para esta sesión
+    // es email_confirmed_at/confirmed_at. La mera existencia de un correo
+    // o un usuario no anónimo no alcanza: un invitado convertido sigue
+    // vinculado con el mismo ID siempre que confirme el correo.
+    const confirmado = Boolean(u.email_confirmed_at || u.confirmed_at)
     const yaPermanente = !esInvitado(u)
-    return confirmado || (tieneCorreo && yaPermanente)
+    return confirmado && yaPermanente
   } catch {
     return false
   }
@@ -416,9 +431,30 @@ async function actualizarPerfilPropio({ alias, nombreVisible, usuarioId }) {
   }
 }
 
+function urlOrigenActual() {
+  if (typeof window !== 'undefined' && window.location && window.location.origin) {
+    return window.location.origin
+  }
+  return ''
+}
+
+function corregirVentana() {
+  // Capacitor compila y sirve el sitio dentro de un WebView (https://localhost).
+  // Para que el correo de recuperación aterrice dentro de la app, se usa el
+  // deep link kodigo://restablecer. Si no hay URL válida y tampoco estamos
+  // en un origen web usable, caeremos a una URL de desarrollo únicamente
+  // para que el flujo no quede roto; el usuario recibirá el correo y el
+  // enlace abrirá la app gracias al intent-filter del APK.
+  const base = URL_RESTABLECER || urlOrigenActual()
+  if (base.startsWith('https://') || base.startsWith('http://') || base.startsWith('kodigo://')) {
+    return base.replace(/\/$/, '')
+  }
+  // Último recurso: la vista de desarrollo si nada aplica.
+  return 'http://localhost:5173'
+}
+
 function urlRestablecer() {
-  const base = URL_RESTABLECER || (typeof window !== 'undefined' ? window.location.origin : '')
-  return `${base}/acceso/restablecer`
+  return `${corregirVentana()}/acceso/restablecer`
 }
 
 function correoYaRegistrado(error) {

@@ -26,7 +26,7 @@
       <template v-else-if="estado === 'listo' && leccion">
         <div class="results-cabecera">
           <button type="button" class="results-volver" aria-label="Volver" @click="volverUnidad">
-            <q-icon name="arrow_back" size="20px" />
+            <IconoArrowLeft :size="20" />
           </button>
           <h1 class="results-titulo-cabecera">
             {{ resultados.aprobada ? 'Clase Completada' : tituloLeccion }}
@@ -95,7 +95,18 @@
           </section>
         </section>
 
-        <div class="results-actions">
+        <div v-if="resultados && unidadCompletada && unidadSiguiente" class="results-actions">
+          <p class="results-proximo-titulo">¡Unidad completada!</p>
+          <button
+            type="button"
+            class="k-btn k-btn--primary k-btn--block k-btn--lg"
+            @click="irALaSiguienteUnidad"
+          >
+            SIGUIENTE UNIDAD
+          </button>
+        </div>
+
+        <div v-else class="results-actions">
           <button
             type="button"
             class="k-btn k-btn--primary k-btn--block k-btn--lg"
@@ -103,9 +114,7 @@
           >
             {{ siguienteDisponible ? 'SIGUIENTE LECCIÓN' : 'VOLVER AL MAPA' }}
           </button>
-          <button type="button" class="k-btn k-btn--ghost k-btn--block" @click="reintentarLeccion">
-            REPETIR EJERCICIO
-          </button>
+          <p class="results-pista-mapa">Podés repetir esta clase cuando quieras desde el mapa.</p>
         </div>
       </template>
     </main>
@@ -116,6 +125,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EstadoPantalla from '@/components/EstadoPantalla.vue'
+import IconoArrowLeft from '@/components/IconoArrowLeft.vue'
 import {
   finalizarIntento,
   obtenerCurso,
@@ -126,13 +136,11 @@ import {
   obtenerHistorialLeccion,
   obtenerResultadosLeccion,
   obtenerUnidadPorId,
+  obtenerUnidades,
   resolverCurso,
   resolverLeccion,
   resolverUnidad,
-  reiniciarIntentoLeccion,
   rutaLeccion,
-  rutaPregunta,
-  rutaResultados,
   rutaUnidad,
 } from '@/services/catalogo'
 import { estado as estadoAuth, refrescarPerfil } from '@/services/auth'
@@ -180,6 +188,18 @@ const leccionSiguiente = computed(() => {
   return leccionesUnidad.value.slice(indice + 1).find((l) => l.estado !== 'bloqueada') ?? null
 })
 const siguienteDisponible = computed(() => Boolean(leccionSiguiente.value))
+
+const unidadesCurso = ref([])
+const unidadSiguiente = computed(() => {
+  if (!unidad.value || !curso.value) return null
+  const actualOrden = unidad.value.orden ?? 1
+  return unidadesCurso.value.find((u) => u.orden === actualOrden + 1) ?? null
+})
+
+const unidadCompletada = computed(() => {
+  if (!leccionesUnidad.value.length) return false
+  return leccionesUnidad.value.every((l) => ['completada', 'aprobada'].includes(l.estado))
+})
 
 const linkUnidad = computed(() => {
   if (unidad.value) return rutaUnidad(unidad.value, curso.value)
@@ -237,12 +257,31 @@ async function cargar() {
       // El XP quedo guardado en perfiles: se relee para que la pantalla y el
       // perfil muestren el valor persistido y no el anterior.
       await refrescarPerfil()
+
+      // Tras finalizar, si la unidad quedó completa releemos el catálogo actualizado;
+      // el servidor desbloqueó la unidad siguiente, ahora hay que refrescar la vista.
+      if (dataCurso) {
+        try {
+          unidadesCurso.value = await obtenerUnidades(dataCurso.id)
+          const fresh = await obtenerLecciones(dataUnidad.id)
+          leccionesUnidad.value = fresh
+        } catch {
+          unidadesCurso.value = []
+        }
+      }
     } else {
       // Sin intento activo (por ejemplo, tras recargar la página): se toma el
       // último intento registrado para mostrar su XP persistido.
       const base = obtenerResultadosLeccion(dataLeccion.id)
       const historial = await obtenerHistorialLeccion(dataLeccion.id).catch(() => [])
       resultados.value = { ...base, xpGanado: historial[0]?.xpGanado ?? 0 }
+      if (dataCurso) {
+        try {
+          unidadesCurso.value = await obtenerUnidades(dataCurso.id)
+        } catch {
+          unidadesCurso.value = []
+        }
+      }
     }
     estado.value = 'listo'
   } catch (error) {
@@ -261,23 +300,17 @@ function siguienteLeccion() {
   volverUnidad()
 }
 
+function irALaSiguienteUnidad() {
+  if (unidadSiguiente.value && curso.value) {
+    router.push(rutaUnidad(unidadSiguiente.value, curso.value))
+    return
+  }
+  volverUnidad()
+}
+
 function volverUnidad() {
   if (unidad.value) {
     router.push(rutaUnidad(unidad.value, curso.value))
-    return
-  }
-  router.push('/courses')
-}
-
-function reintentarLeccion() {
-  if (!leccion.value) return
-  reiniciarIntentoLeccion(leccion.value.id)
-  if (preguntas.value.length && unidad.value) {
-    router.push(rutaPregunta(leccion.value, unidad.value, curso.value, 1))
-    return
-  }
-  if (unidad.value) {
-    router.push(rutaResultados(leccion.value, unidad.value, curso.value))
     return
   }
   router.push('/courses')
@@ -480,5 +513,22 @@ function verCursos() {
   display: grid;
   gap: var(--k-space-3);
   margin-top: var(--k-space-6);
+}
+
+.results-proximo-titulo {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--k-accent);
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.results-pista-mapa {
+  margin: 4px 0 0;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--k-text-3);
 }
 </style>
